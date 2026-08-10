@@ -9,14 +9,14 @@ import time
 from common.frame import PROTOCOL_VERSION, FrameError, FrameType, decode_frame, encode_frame, split_stream
 from common.radio import Radio
 from common.schedule import Scheduler
-from node.sampler import encode_batch, encode_sample, read_sample
+from node.sampler import encode_batch, encode_sample, read_sample, trim_to_span
 from node.store import NodeStore, Sample
 
 
 def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> list[Sample]:
     if len(pending) <= batch_size:
-        return pending
-    return pending[-batch_size:] if prefer_newest else pending[:batch_size]
+        return trim_to_span(pending)
+    return trim_to_span(pending[-batch_size:] if prefer_newest else pending[:batch_size])
 
 
 def _build_frame(id_nodo: int, batch: list[Sample]) -> bytes:
@@ -88,6 +88,7 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
         pending = store.get_pending(limit=batch_size)
         if not pending:
             return
+        pending = trim_to_span(pending)
         scheduler.wait_for_slot()
         radio.send(master_addr, radio.config.channel, _build_frame(radio.config.addr, pending))
         ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
