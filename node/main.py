@@ -19,6 +19,12 @@ def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> 
     return trim_to_span(pending[-batch_size:] if prefer_newest else pending[:batch_size])
 
 
+def _log_tx(batch: list[Sample], ack, pendientes: int) -> None:
+    estado = f"ACK hasta {ack.seq_inicial}" if ack is not None else "SIN ACK"
+    print(f"[{time.strftime('%H:%M:%S')}] TX seq {batch[0].seq}-{batch[-1].seq} "
+          f"({len(batch)} muestras), {estado}, {pendientes} pendientes", flush=True)
+
+
 def _build_frame(id_nodo: int, batch: list[Sample]) -> bytes:
     ts_base = batch[0].ts_utc
     payload = encode_batch(ts_base, [(s.ts_utc, s.payload) for s in batch])
@@ -70,6 +76,7 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
             if ack is not None:
                 store.mark_confirmed_up_to(ack.seq_inicial)
                 store.purge_confirmed()
+            _log_tx(batch, ack, len(pending))
 
         time.sleep(sample_interval_s)
         count += 1
@@ -92,6 +99,7 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
         scheduler.wait_for_slot()
         radio.send(master_addr, radio.config.channel, _build_frame(radio.config.addr, pending))
         ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
+        _log_tx(pending, ack, len(pending))
         if ack is None:
             attempts += 1
             continue
