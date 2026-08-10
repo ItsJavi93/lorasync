@@ -1,0 +1,230 @@
+\part{Cómo funciona LoRa}
+\label{part:lora}
+
+\chapter{Qué es modular una señal}
+
+\section{Qué es}
+
+Una antena por sí sola solo puede emitir una onda a una frecuencia fija; para transportar
+información hay que \textbf{modular}: variar alguna propiedad de esa onda (amplitud,
+frecuencia o fase) de forma que el receptor pueda reconstruir los bits originales a partir de
+esas variaciones. AM varía la amplitud, FM varía la frecuencia; los esquemas digitales modernos
+—incluido LoRa— varían combinaciones de frecuencia y fase para codificar símbolos, no solo bits
+sueltos.
+
+\section{Por qué importa aquí}
+
+LoRa no usa un esquema de modulación clásico como FSK o PSK puros: usa \textbf{espectro
+ensanchado por chirp} (\emph{Chirp Spread Spectrum}, CSS), diseñado específicamente para
+maximizar el alcance a costa de velocidad, que es exactamente el compromiso que necesita un
+sensor remoto que envía pocos bytes por segundo pero debe llegar lejos con un transmisor de
+baja potencia.
+
+\chapter{Espectro ensanchado por chirp}
+
+\section{Qué es}
+
+Un \emph{chirp} es un tono cuya frecuencia sube (o baja) linealmente en el tiempo, barriendo
+todo el ancho de banda del canal durante la duración de un símbolo. Es el mismo fenómeno que un
+silbido que empieza grave y termina agudo.
+
+\begin{nota}[title={Analogía}]
+Imagina que en vez de gritar una sola nota fija (como haría una modulación de amplitud
+clásica), silbas deslizando el tono de grave a agudo. Ese deslizamiento completo, con una
+velocidad de barrido determinada, \emph{es} un símbolo. LoRa codifica información desplazando
+el \emph{punto de partida} de ese barrido: un silbido que empieza a medio camino y da la vuelta
+codifica un símbolo distinto de uno que empieza al principio.
+\end{nota}
+
+\begin{figure}[h]
+  \centering
+  \begin{tikzpicture}[scale=1.0, font=\footnotesize]
+    \draw[-{Latex}] (0,0) -- (6.5,0) node[right] {tiempo};
+    \draw[-{Latex}] (0,0) -- (0,3.2) node[above] {frecuencia};
+    % up-chirp completo (símbolo 0)
+    \draw[thick, blue!60!black] (0,0.3) -- (2,3);
+    \draw[thick, blue!60!black, dashed] (2,3) -- (2,0);
+    \draw[thick, blue!60!black] (2,0) -- (4,2.7);
+    \node[blue!60!black, below, text width=2.6cm, align=center] at (1.6,-0.15)
+      {símbolo 0\\(arranca en 0)};
+    % chirp con offset (símbolo desplazado)
+    \draw[thick, red!60!black] (4,1.6) -- (4.9,3);
+    \draw[thick, red!60!black, dashed] (4.9,3) -- (4.9,0);
+    \draw[thick, red!60!black] (4.9,0) -- (6,1.6);
+    \node[red!60!black, below, text width=2.4cm, align=center] at (5.3,-0.15)
+      {símbolo\\con offset};
+  \end{tikzpicture}
+  \caption{Un chirp barre linealmente toda la banda; el punto donde empieza el barrido
+    (y da la vuelta) codifica el valor del símbolo. Cada línea discontinua marca un
+    ``salto'' de vuelta a la frecuencia mínima al llegar al máximo del canal.}
+\end{figure}
+
+Por qué esto ayuda al alcance: el receptor no necesita detectar un chirp aislado con precisión
+absoluta de amplitud (como sí exige FSK/PSK clásicos); necesita \emph{correlacionar} la señal
+recibida con la forma conocida del chirp. Esa correlación acumula energía de todo el símbolo, lo
+que permite decodificar señales que están \emph{por debajo del nivel de ruido} —algo imposible
+con modulaciones de banda estrecha convencionales—.
+
+\section{Factor de dispersión: el compromiso alcance/velocidad}
+
+\subsection*{Qué es}
+
+El \textbf{factor de dispersión} (\emph{Spreading Factor}, SF) determina cuántos \emph{bits por
+símbolo} se transmiten y, por tanto, cuánto dura cada chirp: $2^{SF}$ posibles puntos de
+arranque distintos, es decir, $SF$ bits de información por símbolo. Un SF más alto significa
+más puntos de arranque posibles (más información por símbolo) pero también un barrido más
+lento, así que cada símbolo tarda más tiempo en transmitirse.
+
+\begin{equation}
+  T_{\text{sym}} = \frac{2^{SF}}{BW}
+  \label{eq:tsym}
+\end{equation}
+
+\subsection*{Por qué importa aquí}
+
+Un SF más alto extiende la energía de cada bit sobre un chirp más largo, lo que mejora la
+\textbf{sensibilidad} del receptor (puede detectar señales más débiles) a costa de una
+\textbf{tasa de datos} menor. Este proyecto usa \textbf{SF7}, el más bajo (y más rápido) del
+rango típico (7 a 12), porque el presupuesto de enlace de la sección~\ref{sec:presupuesto}
+mostró un margen de \SI{45}{dB} incluso con SF7: no hace falta sacrificar velocidad para ganar
+alcance que ya sobra.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{@{}lrrl@{}}
+    \toprule
+    SF & Símbolos/s @ 500 kHz & Sensibilidad aprox. & Compromiso \\
+    \midrule
+    7  & \num{3906}  & $\approx \SI{-118}{dBm}$ & rápido, alcance moderado \\
+    9  & \num{977}   & $\approx \SI{-124}{dBm}$ & más lento, más alcance \\
+    12 & \num{122}   & $\approx \SI{-131}{dBm}$ & muy lento, máximo alcance \\
+    \bottomrule
+  \end{tabular}
+  \caption{A mayor SF, mayor sensibilidad (más alcance) pero menor tasa de símbolos
+    (más tiempo de aire por trama). Valores de sensibilidad aproximados para BW = 500 kHz.}
+\end{table}
+
+\section{Ancho de banda y corrección de errores}
+
+\subsection*{Qué es}
+
+El \textbf{ancho de banda} (BW) es el rango de frecuencias que ocupa cada chirp: cuanto más
+ancho, más rápido se puede barrer (menos tiempo por símbolo, ecuación~\eqref{eq:tsym}), pero
+también entra más ruido de banda ancha al receptor, lo que reduce ligeramente la sensibilidad.
+Este proyecto usa \textbf{\SI{500}{kHz}}, el máximo disponible en el módulo, para minimizar el
+tiempo de aire.
+
+La \textbf{tasa de codificación} (\emph{Coding Rate}, CR) añade bits redundantes de corrección
+de errores hacia adelante (FEC): con CR = 4/5, por cada 4 bits de datos se transmite 1 bit de
+paridad. Esto permite al receptor corregir errores de bit sin pedir retransmisión, a costa de
+transmitir algo más de información por trama útil. El proyecto usa \textbf{4/5}, la tasa mínima
+de sobrecarga (frente a 4/6, 4/7 o 4/8, más robustas pero más lentas).
+
+\subsection*{Por qué importa aquí}
+
+BW alto y CR mínimo son ambos decisiones de \emph{minimizar el tiempo de aire}, coherentes con
+la elección de SF7: el margen de enlace de \SI{45}{dB} permite ser agresivo en velocidad sin
+poner en riesgo la fiabilidad del enlace a \SI{600}{m}.
+
+\chapter{El tiempo de aire, término a término}
+\label{sec:airtime}
+
+\section{Qué es}
+
+El \textbf{tiempo de aire} (\emph{time on air}) es cuánto dura, en el aire, la transmisión
+completa de una trama: preámbulo más carga útil. Es el número que determina cuántas tramas por
+segundo caben en el canal y, por extensión, cuántos nodos puede soportar el sistema —el tema de
+la Parte~\ref{part:regulacion} y del diseño TDMA de la Fase~4—.
+
+La fórmula estándar de LoRa (documentada por Semtech) tiene dos partes: el preámbulo y la carga
+útil, cada una expresada en número de símbolos y luego convertida a tiempo con $T_{\text{sym}}$
+de la ecuación~\eqref{eq:tsym}.
+
+\subsection*{Preámbulo}
+
+\begin{equation}
+  T_{\text{preámbulo}} = (n_{\text{pre}} + 4.25) \cdot T_{\text{sym}}
+  \label{eq:tpre}
+\end{equation}
+
+$n_{\text{pre}}$ es el número de símbolos de preámbulo configurados (típicamente 8: una
+secuencia conocida que el receptor usa para sincronizarse). El término fijo $4.25$ cubre la
+palabra de sincronización y el arranque de la decodificación, y es parte de la especificación
+de Semtech, no un parámetro configurable.
+
+\subsection*{Carga útil}
+
+\begin{equation}
+  n_{\text{payload}} = 8 + \max\!\left(
+    \left\lceil \frac{8 \cdot PL - 4 \cdot SF + 28 + 16}{4 \cdot SF} \right\rceil
+    \cdot (CR + 4),\ 0 \right)
+  \label{eq:npayload}
+\end{equation}
+
+\begin{equation}
+  T_{\text{trama}} = T_{\text{preámbulo}} + n_{\text{payload}} \cdot T_{\text{sym}}
+  \label{eq:ttrama}
+\end{equation}
+
+donde $PL$ es el tamaño de la carga útil en bytes, y $CR$ es la tasa de codificación expresada
+como el número de bits de paridad por cada 4 bits de datos (CR = 1 para 4/5, CR = 4 para 4/8).
+El término $+16$ dentro del numerador corresponde al CRC de 16 bits que valida la integridad de
+la trama a nivel de radio (independiente del CRC16 propio de la capa de aplicación, que se
+implementa en la Fase~2); el término $+28$ y el $8$ inicial son constantes de la
+especificación LoRa relacionadas con el encabezado explícito.
+
+\section{Por qué importa aquí: los 76,9 ms resueltos}
+
+El proyecto agrupa 10 muestras por trama. Con el formato de trama de la Fase~2 (cabecera +
+10 muestras de \SI{18}{B} + CRC16, ver Supuestos declarados en el plan), el tamaño resultante
+es $PL = \SI{194}{B}$. Con SF7, BW = \SI{500}{kHz} y CR = 1 (4/5):
+
+\begin{ejemplo}
+\textbf{Paso 1 — Duración de un símbolo:}
+\[
+  T_{\text{sym}} = \frac{2^7}{500\,000} = \SI{0.256}{ms}
+\]
+
+\textbf{Paso 2 — Preámbulo (8 símbolos configurados):}
+\[
+  T_{\text{preámbulo}} = (8 + 4.25) \cdot 0.256\,\text{ms} = \SI{3.136}{ms}
+\]
+
+\textbf{Paso 3 — Símbolos de carga útil, con $PL = 194$, $SF = 7$, $CR = 1$:}
+\begin{align*}
+  \frac{8 \cdot 194 - 4 \cdot 7 + 28 + 16}{4 \cdot 7}
+    &= \frac{1552 - 28 + 28 + 16}{28} = \frac{1568}{28} = 56 \\
+  n_{\text{payload}} &= 8 + \lceil 56 \rceil \cdot (1 + 4) = 8 + 56 \cdot 5 = 288
+\end{align*}
+
+\textbf{Paso 4 — Tiempo de trama:}
+\begin{align*}
+  T_{\text{trama}} &= 3.136\,\text{ms} + 288 \cdot 0.256\,\text{ms} \\
+    &= 3.136 + 73.728 = \SI{76.864}{ms} \approx \SI{76.9}{ms}
+\end{align*}
+\end{ejemplo}
+
+Este es exactamente el valor que reproduce \texttt{common/airtime.py} en la Fase~1, y el que
+sostiene el diseño del slot TDMA de \SI{136.9}{ms} (76,9 ms de trama + 60 ms de guarda) en la
+Fase~4.
+
+\section{Por qué un SF alto no siempre es mejor}
+
+Es tentador pensar que, si SF7 ya funciona con \SI{45}{dB} de margen, usar SF12 —el más
+robusto— sería ``más seguro''. En este proyecto sería contraproducente: la
+ecuación~\eqref{eq:tsym} muestra que $T_{\text{sym}}$ crece \emph{exponencialmente} con SF, no
+linealmente. Pasar de SF7 a SF12 multiplica $T_{\text{sym}}$ por $2^5 = 32$, lo que dispararía
+el tiempo de aire de cada trama muy por encima de lo que 30 nodos pueden compartir en un canal
+sin colisionar constantemente (ver el diseño de superframe de la Fase~4). El SF correcto no es
+el más robusto en abstracto, sino el más bajo que todavía deja margen de enlace suficiente para
+la distancia real del despliegue —exactamente el criterio que usó la sección~\ref{sec:presupuesto}
+para justificar SF7—.
+
+\section{Dónde aparece en el código}
+
+\texttt{common/airtime.py} (Fase~1) implementa las ecuaciones~\eqref{eq:tsym},
+\eqref{eq:tpre}, \eqref{eq:npayload} y \eqref{eq:ttrama} literalmente, y su prueba
+(\texttt{tests/test\_airtime.py}) verifica el resultado de \SI{76.9}{ms} calculado aquí. El
+mismo módulo calcula la duración de slot y la capacidad del canal que sostienen el diseño
+TDMA de la Fase~4.

@@ -1,0 +1,283 @@
+\part{Fundamentos de radio}
+\label{part:radio}
+
+\chapter{Qué es una onda de radio}
+
+\section{Qué es}
+
+Una onda de radio es una oscilación del campo electromagnético que viaja por el espacio a la
+velocidad de la luz, $c \approx \SI{3e8}{m/s}$. Igual que una ola en el agua, una onda de radio
+tiene una \emph{longitud de onda} $\lambda$ (la distancia entre dos crestas) y una
+\emph{frecuencia} $f$ (cuántas crestas pasan por un punto fijo cada segundo). Las dos están
+ligadas por una relación muy simple:
+
+\begin{equation}
+  c = f \cdot \lambda
+  \label{eq:onda}
+\end{equation}
+
+\begin{figure}[h]
+  \centering
+  \begin{tikzpicture}[scale=1.0]
+    \draw[-{Latex}] (0,0) -- (8.5,0) node[right] {tiempo};
+    \draw[-{Latex}] (0,-1.3) -- (0,1.3) node[above] {amplitud};
+    \draw[thick, blue!60!black, domain=0:8, samples=200]
+      plot (\x, {sin(\x*180)});
+    % marca de un periodo
+    \draw[<->, thick] (0,-1.1) -- (2,-1.1) node[midway, below] {$T = 1/f$};
+    \draw[dashed, gray] (0,1) -- (0,-1.3);
+    \draw[dashed, gray] (2,1) -- (2,-1.3);
+  \end{tikzpicture}
+  \caption{Una onda senoidal: el periodo $T$ es el tiempo entre dos crestas, y la frecuencia
+    es $f = 1/T$.}
+  \label{fig:onda-seno}
+\end{figure}
+
+Cuando decimos que un módulo transmite a \textbf{\SI{920}{MHz}}, decimos que el campo
+electromagnético oscila \num{920000000} veces por segundo. Con la ecuación~\eqref{eq:onda}, la
+longitud de onda correspondiente es
+
+\[
+  \lambda = \frac{c}{f} = \frac{\SI{3e8}{m/s}}{\SI{920e6}{Hz}} \approx \SI{0.326}{m},
+\]
+
+es decir, unos 33 cm entre cresta y cresta. Este número no es anecdótico: el tamaño físico de
+una antena eficiente está ligado a una fracción de $\lambda$ (típicamente $\lambda/4$ o
+$\lambda/2$), razón por la cual las antenas para esta banda miden unos pocos centímetros.
+
+\begin{nota}
+La radio no ``sabe'' qué frecuencia debería usar cada aplicación. La asignación de bandas
+(\SI{920}{MHz} para este proyecto, \SI{2.4}{GHz} para wifi, \SI{100}{MHz} para FM) es una
+decisión humana, administrativa, que se estudia en la Parte~\ref{part:regulacion}.
+\end{nota}
+
+\section{Por qué importa aquí}
+
+Todos los cálculos del sistema \texttt{lorasync} —presupuesto de enlace, tamaño de antena,
+adaptación de impedancia— parten de un único número: la frecuencia de trabajo. El proyecto usa
+el canal 70, que corresponde a \SI{920}{MHz} (ver la fórmula de canalización en la
+Parte~\ref{part:regulacion}). Todo lo que sigue en este capítulo —decibelios, potencia,
+ganancia, presupuesto de enlace— se calcula \emph{para esa frecuencia concreta}.
+
+\section{Dónde aparece en el código}
+
+La frecuencia no se transmite como tal; se configura indirectamente mediante el canal
+(\texttt{AT+TXCH=70}, \texttt{AT+RXCH=70}), que el módulo traduce internamente a
+\SI{920}{MHz}. La validación de que el canal esté en el rango legal vive en
+\texttt{common/config.py} (Fase~1).
+
+\chapter{Decibelios y dBm}
+
+\section{Qué es}
+
+Las potencias de radio abarcan un rango enorme: un transmisor puede emitir \SI{100}{mW}
+mientras que un receptor detecta señales de una billonésima de vatio. Trabajar con esos
+números en vatios es incómodo, así que la ingeniería de radio usa una escala
+\textbf{logarítmica}: el decibelio (dB).
+
+\begin{equation}
+  \text{ganancia en dB} = 10 \cdot \log_{10}\!\left(\frac{P_2}{P_1}\right)
+  \label{eq:db}
+\end{equation}
+
+La ventaja de una escala logarítmica es que convierte multiplicaciones en sumas. Doblar una
+potencia (multiplicarla por 2) equivale siempre a sumar $10 \cdot \log_{10}(2) \approx
+\SI{3}{dB}$, sin importar el punto de partida:
+
+\begin{ejemplo}
+Si un amplificador dobla la potencia de una señal, su ganancia es
+$10\log_{10}(2) = \SI{3.01}{dB} \approx \SI{3}{dB}$.
+Si la potencia se multiplica por 10, la ganancia es $10\log_{10}(10) = \SI{10}{dB}$.
+Si se divide entre 2 (la mitad), la ``ganancia'' es $\SI{-3}{dB}$: una pérdida de \SI{3}{dB}.
+\end{ejemplo}
+
+El \textbf{dBm} es un caso particular: un decibelio \emph{referenciado a \SI{1}{mW}}.
+
+\begin{equation}
+  P_{\text{dBm}} = 10 \cdot \log_{10}\!\left(\frac{P_{\text{mW}}}{1\,\text{mW}}\right)
+  \label{eq:dbm}
+\end{equation}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{@{}rl@{}}
+    \toprule
+    Potencia & Equivalente \\
+    \midrule
+    \SI{0}{dBm}  & \SI{1}{mW} \\
+    \SI{10}{dBm} & \SI{10}{mW} \\
+    \SI{20}{dBm} & \SI{100}{mW} \\
+    \SI{-118}{dBm} & $\approx \SI{1.6e-15}{W}$ (sensibilidad típica del receptor) \\
+    \bottomrule
+  \end{tabular}
+  \caption{La escala dBm hace manejables números que en vatios serían absurdamente pequeños.}
+\end{table}
+
+\begin{nota}
+Por ser una escala logarítmica \emph{referenciada}, los dBm \textbf{se suman y se restan}, no
+se multiplican. Sumar dos etapas de ganancia en dB equivale a multiplicar las potencias reales.
+Esto es exactamente lo que se aprovecha en el presupuesto de enlace (sección~\ref{sec:presupuesto}).
+\end{nota}
+
+\section{Por qué importa aquí}
+
+Todo el presupuesto de enlace del proyecto —potencia de salida, ganancia de antena, pérdidas
+por trayecto, sensibilidad del receptor— se expresa en dB y dBm precisamente porque así las
+cuentas se reducen a sumas y restas en vez de productos y cocientes de números con muchos
+ceros.
+
+\section{Dónde aparece en el código}
+
+El comando \texttt{AT+PWR=10} configura la potencia de transmisión en dBm directamente
+(\num{10} a \num{22} dBm según el firmware). El RSSI que reporta el módulo
+(\texttt{AT+RSSI=1}) también se expresa en dBm, y es el valor que se separa del final de cada
+trama en \texttt{common/radio.py} (Fase~1) y se guarda en la columna \texttt{rssi} del CSV
+(Fase~3).
+
+\chapter{Potencia, ganancia de antena y PIRE}
+
+\section{Qué es}
+
+Tres cantidades determinan cuánta energía efectiva sale de un transmisor hacia el aire:
+
+\begin{itemize}
+  \item \textbf{Potencia de transmisión} ($P_{TX}$): la energía que el módulo entrega a la
+    antena, en dBm. En este proyecto, \SI{10}{dBm}.
+  \item \textbf{Ganancia de antena} ($G$): cuánto \emph{concentra} la antena esa energía en
+    ciertas direcciones en vez de irradiarla por igual en todas. Se mide en dBi (decibelios
+    respecto a una antena isotrópica ideal, que irradia igual en todas direcciones). Una antena
+    típica de \SI{915}{MHz} tiene \SI{2}{dBi} a \SI{3}{dBi} de ganancia.
+  \item \textbf{PIRE} (Potencia Isotrópica Radiada Equivalente, EIRP en inglés): la potencia
+    que \emph{parecería} tener un transmisor isotrópico ideal para producir la misma intensidad
+    de señal en la dirección de máxima ganancia de la antena real.
+\end{itemize}
+
+\begin{equation}
+  \text{PIRE}_{\text{dBm}} = P_{TX,\text{dBm}} + G_{\text{dBi}}
+  \label{eq:pire}
+\end{equation}
+
+Gracias a la escala logarítmica, calcular la PIRE es una simple suma.
+
+\section{Por qué importa aquí}
+
+Con $P_{TX} = \SI{10}{dBm}$ y una antena de $G = \SI{2}{dBi}$ en el nodo transmisor:
+
+\[
+  \text{PIRE} = 10\,\text{dBm} + 2\,\text{dBi} = 12\,\text{dBm}.
+\]
+
+Este valor es el punto de partida del presupuesto de enlace de la siguiente sección. La
+ganancia de la antena \emph{receptora} también entra en la cuenta, porque una antena
+receptora concentra igual de bien la energía que le llega.
+
+\section{Dónde aparece en el código}
+
+Ninguna de estas cantidades se calcula en tiempo de ejecución: son parámetros de diseño fijos
+(potencia por \texttt{AT+PWR}, ganancia de antena elegida al comprar el hardware) que
+justifican por qué \SI{10}{dBm} —y no la potencia máxima de \SI{22}{dBm}— es suficiente para
+este proyecto, como se ve a continuación.
+
+\chapter{Presupuesto de enlace}
+\label{sec:presupuesto}
+
+\section{Qué es}
+
+Un \emph{presupuesto de enlace} (\emph{link budget}) es la contabilidad completa, en dB, de
+toda la energía que gana o pierde una señal entre el transmisor y el receptor. Se parte de la
+PIRE, se resta todo lo que la señal pierde en el camino, y se compara el resultado con la
+sensibilidad del receptor: el nivel mínimo de señal que el receptor todavía puede decodificar.
+Si lo que llega supera la sensibilidad, el enlace funciona; la diferencia es el
+\textbf{margen de enlace}, que actúa de colchón frente a imprevistos (lluvia, obstáculos,
+desvanecimientos).
+
+La mayor pérdida en un enlace de línea de vista al aire libre es la \textbf{pérdida de espacio
+libre} (FSPL, \emph{Free-Space Path Loss}): la dilución de la energía porque se reparte sobre
+una esfera cada vez mayor a medida que la onda se aleja de la antena. La fórmula estándar,
+para $d$ en kilómetros y $f$ en megahercios, es:
+
+\begin{equation}
+  \text{FSPL}_{\text{dB}} = 32.45 + 20 \log_{10}(f_{\text{MHz}}) + 20 \log_{10}(d_{\text{km}})
+  \label{eq:fspl}
+\end{equation}
+
+El $20\log_{10}$ en ambos términos refleja que la pérdida crece con el \emph{cuadrado} de la
+frecuencia y con el \emph{cuadrado} de la distancia: doblar la distancia cuesta
+$20\log_{10}(2) \approx \SI{6}{dB}$ adicionales de pérdida.
+
+\section{Por qué importa aquí: los 600 m resueltos}
+
+El proyecto exige cobertura fiable a \SI{600}{m} en el canal 70 (\SI{920}{MHz}), con
+$P_{TX} = \SI{10}{dBm}$, antenas de \SI{2}{dBi} en ambos extremos y una sensibilidad de
+receptor de $\approx \SI{-118}{dBm}$ para SF7 a \SI{500}{kHz} de ancho de banda (el porqué de
+esta cifra se explica en la Parte~\ref{part:lora}).
+
+\begin{ejemplo}
+\textbf{Paso 1 — Pérdida de espacio libre a 600 m y 920 MHz:}
+\begin{align*}
+  \text{FSPL} &= 32.45 + 20\log_{10}(920) + 20\log_{10}(0.6) \\
+              &= 32.45 + 59.28 - 4.44 \\
+              &= \SI{87.3}{dB}
+\end{align*}
+
+\textbf{Paso 2 — Potencia recibida:}
+\begin{align*}
+  P_{RX} &= P_{TX} + G_{TX} + G_{RX} - \text{FSPL} \\
+         &= 10\,\text{dBm} + 2\,\text{dBi} + 2\,\text{dBi} - 87.3\,\text{dB} \\
+         &= \SI{-73.3}{dBm}
+\end{align*}
+
+\textbf{Paso 3 — Margen de enlace:}
+\begin{align*}
+  \text{Margen} &= P_{RX} - \text{Sensibilidad} \\
+                &= -73.3\,\text{dBm} - (-118\,\text{dBm}) \\
+                &\approx \SI{45}{dB}
+\end{align*}
+\end{ejemplo}
+
+Un margen de \SI{45}{dB} es muy holgado para \SI{600}{m}: en la práctica, este enlace
+funcionaría a distancias mucho mayores en condiciones de línea de vista despejada. El margen
+existe precisamente para absorber lo que la fórmula ideal no modela: vegetación, paredes,
+desvanecimiento por multitrayecto y el hecho de que las antenas casi nunca están perfectamente
+alineadas.
+
+\begin{figure}[h]
+  \centering
+  \begin{tikzpicture}[node distance=1.3cm, font=\small, every node/.style={align=center}]
+    \node[draw, rounded corners, fill=blue!8] (tx) {PIRE\\ \SI{12}{dBm}};
+    \node[draw, rounded corners, fill=red!8, right=2.6cm of tx] (fspl) {$-$ FSPL\\ \SI{87.3}{dB}};
+    \node[draw, rounded corners, fill=blue!8, right=2.6cm of fspl] (rx) {$P_{RX}$\\ \SI{-73.3}{dBm}};
+    \draw[-{Latex}, thick] (tx) -- (fspl);
+    \draw[-{Latex}, thick] (fspl) -- (rx);
+    \node[below=0.6cm of rx, draw, rounded corners, fill=green!10] (sens) {Sensibilidad\\ \SI{-118}{dBm}};
+    \draw[<->, thick, green!30!black] ($(rx.south) + (0,-0.05)$) -- (sens.north)
+      node[midway, right] {margen $\approx \SI{45}{dB}$};
+  \end{tikzpicture}
+  \caption{Presupuesto de enlace a \SI{600}{m}: de la PIRE a la potencia recibida, y el margen
+    frente a la sensibilidad del receptor.}
+\end{figure}
+
+\section{Adaptación de antena}
+
+Una antena está diseñada para una frecuencia central, pero sigue funcionando razonablemente
+bien en frecuencias cercanas: su comportamiento (impedancia, patrón de radiación) varía de
+forma suave, no abrupta. Una antena diseñada para \SI{868}{MHz}, usada a \SI{920}{MHz}, tiene
+un desajuste de apenas
+
+\[
+  \frac{920 - 868}{868} \approx 0.06 \approx \SI{6}{\percent},
+\]
+
+que en la práctica se traduce en una pérdida de adaptación de solo \textasciitilde\SI{0.2}{dB}
+a \SI{0.5}{dB} —imperceptible frente a un margen de enlace de \SI{45}{dB}—. Por eso las
+antenas de \SI{868}{MHz} que ya existían sirven para arrancar el proyecto, aunque a futuro
+conviene reemplazarlas por antenas centradas en \SI{915}{MHz} para maximizar el rendimiento y
+evitar cualquier duda regulatoria sobre el equipo irradiante.
+
+\section{Dónde aparece en el código}
+
+\texttt{common/airtime.py} (Fase~1) no calcula el presupuesto de enlace —es una decisión de
+diseño ya tomada, no un valor que el software deba verificar en tiempo real—, pero sí depende
+de los mismos parámetros de radio (SF, BW) que determinan la sensibilidad usada aquí. La
+herramienta \texttt{tools/linkcheck.py} (Fase~5) mide el RSSI real en campo para contrastarlo
+con el $P_{RX} \approx \SI{-73.3}{dBm}$ calculado en esta sección.

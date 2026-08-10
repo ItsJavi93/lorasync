@@ -1,0 +1,39 @@
+# Artefactos de compilación LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.run.xml
+*.nav
+*.snm
+*.vrb
+docs/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Datos locales
+*.db
+*.db-wal
+*.db-shm
+*.csv
+
+# Cache de pruebas
+.pytest_cache/
+
+# Configuracion local por equipo (usar config.example.toml como plantilla)
+config.toml
+
+# Metadatos de MATLAB Drive
+.MATLABDriveTag

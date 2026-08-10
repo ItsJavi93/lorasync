@@ -1,0 +1,153 @@
+\part{El espectro como recurso legal}
+\label{part:regulacion}
+
+\chapter{Por qué se regula el espectro}
+
+\section{Qué es}
+
+El espectro radioeléctrico es un recurso \textbf{compartido y finito}: dos transmisores en la
+misma frecuencia, al mismo tiempo y en el mismo lugar, se interfieren mutuamente y ninguno se
+puede decodificar. A diferencia de un cable, donde añadir más usuarios es cuestión de tender más
+cobre, el espectro no se puede ``fabricar'': todo el que existe ya está ahí, y su uso debe
+coordinarse por ley para que servicios críticos —aviación, emergencias, telefonía celular
+licenciada— no sufran interferencia de dispositivos no autorizados.
+
+Por eso cada país tiene una autoridad reguladora que decide qué franjas de frecuencia se
+reservan para qué uso, y bajo qué condiciones técnicas (potencia máxima, ancho de banda, ciclo
+de trabajo) se puede transmitir en cada una.
+
+\section{Qué son las bandas ISM}
+
+Las bandas \textbf{ISM} (\emph{Industrial, Scientific and Medical}) son franjas de espectro
+que la mayoría de países reserva para uso \textbf{libre y sin licencia individual}, siempre que
+el equipo cumpla ciertas condiciones técnicas (potencia máxima, tipo de modulación). Es el
+régimen bajo el cual operan wifi (\SI{2.4}{GHz}), Bluetooth, y también las bandas sub-GHz que
+usa LoRa. ``Libre'' no significa ``sin reglas'': significa que no hace falta pedir una licencia
+de operación individual, pero el equipo sí debe respetar los límites técnicos de la banda.
+
+\section{Por qué importa aquí}
+
+El proyecto \texttt{lorasync} depende enteramente de que su banda de operación sea, en efecto,
+de uso libre en Colombia. Transmitir en una banda licenciada sin autorización —aunque sea con
+poca potencia— es una infracción, no un simple detalle técnico.
+
+\chapter{Qué es la ANE}
+
+La \textbf{Agencia Nacional del Espectro} (ANE) es la entidad colombiana que administra,
+vigila y controla el uso del espectro radioeléctrico en el país. Publica el \textbf{Cuadro
+Nacional de Atribución de Bandas de Frecuencias} (CNABF), el documento que determina, banda por
+banda, qué servicios están autorizados y bajo qué condiciones. Es la referencia oficial usada
+para las cifras de esta sección~\cite{ane_cnabf}.
+
+\chapter{Por qué 915--928 MHz sí y 868 MHz no}
+
+\section{Qué es}
+
+En Europa, la banda sub-GHz de uso libre para IoT es \SI{863}{}--\SI{870}{MHz}, con
+\SI{868}{MHz} como frecuencia de referencia habitual —de ahí que muchísima documentación y
+hardware genérico de LoRa (incluidas antenas) esté etiquetado ``868 MHz''—. Colombia
+\textbf{no} sigue la atribución europea en esa franja: la ANE clasifica
+\SI{851}{}--\SI{915}{MHz} como espectro celular licenciado (usado por los operadores móviles),
+y reserva la banda de uso libre en \SI{915}{}--\SI{928}{MHz}, alineada con el modelo
+norteamericano de banda ISM de 900 MHz~\cite{ttn_au915}.
+
+\begin{figure}[h]
+  \centering
+  \begin{tikzpicture}[scale=1.0, font=\footnotesize, every node/.style={align=center}]
+    % eje
+    \draw[-{Latex}] (0,0) -- (10.5,0) node[right, font=\footnotesize] {frecuencia (MHz)};
+    % banda restringida (celular licenciado)
+    \fill[red!25] (0.5,0.3) rectangle (7,1.7);
+    \draw (0.5,0.3) rectangle (7,1.7);
+    \node[text width=5.6cm] at (3.75,1.0) {celular licenciado\\(851--915 MHz)\\\textbf{prohibido}};
+    % banda libre
+    \fill[green!25] (7,0.3) rectangle (9,1.7);
+    \draw (7,0.3) rectangle (9,1.7);
+    \node at (8,1.0) {\textbf{915--928}\\libre};
+    % ticks y etiquetas del eje
+    \foreach \x/\lbl in {0.5/851, 7/915, 9/928} {
+      \draw (\x,0.25) -- (\x,0.35);
+      \node[below, font=\scriptsize] at (\x,0.15) {\lbl};
+    }
+    % marca 868 (bajo el eje, separada de las etiquetas de los ticks)
+    \draw[dashed, blue!60!black, thick] (4.55,-0.9) -- (4.55,1.9);
+    \node[blue!60!black, font=\scriptsize, text width=3.2cm] at (4.55,-1.15)
+      {868 MHz (Europa)\\\textbf{no usar en CO}};
+    % marca canal 70 -> 920 MHz (sobre el eje)
+    \draw[dashed, orange!70!black, thick] (7.9,-0.9) -- (7.9,2.1);
+    \node[orange!70!black, font=\scriptsize, text width=3.2cm] at (7.9,2.35)
+      {canal 70 = 920 MHz\\(usado aquí)};
+  \end{tikzpicture}
+  \caption{La banda de \SI{868}{MHz}, libre en Europa, cae dentro del espectro celular
+    licenciado en Colombia. La banda libre colombiana equivalente es 915--928\,MHz.}
+  \label{fig:banda-colombia}
+\end{figure}
+
+\section{Por qué importa aquí}
+
+Confundir la convención europea con la colombiana es el error regulatorio más probable en un
+proyecto que usa hardware genérico de LoRa (documentación, foros y valores de fábrica casi
+siempre asumen \SI{868}{MHz}). El valor de fábrica del módulo Waveshare (canal 18) corresponde
+precisamente a \SI{868}{MHz}, y \textbf{no debe usarse en Colombia}.
+
+\section{La fórmula de canalización}
+
+El firmware del módulo no acepta una frecuencia directamente: acepta un número de
+\textbf{canal}, que se traduce a frecuencia con:
+
+\begin{equation}
+  f_{\text{MHz}} = 850 + \text{canal}
+  \label{eq:canal}
+\end{equation}
+
+Los canales válidos para la banda libre colombiana son, por tanto, los que caen entre 915 y
+928: $\text{canal} \in [65, 78]$. El proyecto usa el \textbf{canal 70}, que por la
+ecuación~\eqref{eq:canal} da $850 + 70 = \SI{920}{MHz}$, cómodamente dentro del rango legal y
+lejos de sus bordes.
+
+\begin{trampa}
+El valor de fábrica del módulo es el \textbf{canal 18}, que da $850 + 18 = \SI{868}{MHz}$: la
+frecuencia europea, ilegal en Colombia. Cualquier módulo recién desempacado o reseteado a
+valores de fábrica transmite fuera de banda hasta que se reconfigura explícitamente.
+\end{trampa}
+
+\chapter{Ciclo de trabajo y convivencia}
+
+\section{Qué es}
+
+El \textbf{ciclo de trabajo} (\emph{duty cycle}) es el porcentaje de tiempo que un transmisor
+tiene permitido ocupar el canal. En Europa, la banda de \SI{868}{MHz} impone un límite estricto
+de ciclo de trabajo (típicamente 1\,\% por sub-banda) como mecanismo regulatorio para forzar a
+que muchos dispositivos puedan compartir el mismo canal sin coordinación explícita. El modelo
+norteamericano (FCC Part 15.247), del que deriva la banda libre de 900 MHz en Colombia, no
+impone un límite de ciclo de trabajo tan estricto, pero exige en su lugar \textbf{ancho de
+banda mínimo} o \textbf{salto de frecuencia} (\emph{frequency hopping}), como mecanismo
+alternativo para evitar que un solo dispositivo monopolice una franja estrecha del
+espectro~\cite{fcc_15247}.
+
+\section{Por qué importa aquí}
+
+Los módulos Waveshare de este proyecto son de \textbf{canal fijo}: no implementan salto de
+frecuencia. Esto significa que no pueden cumplir la variante ``frequency hopping'' del modelo
+FCC. La variante que sí aplica es la de \textbf{ancho de banda mínimo mediante modulación
+digital de banda ancha}: los \SI{500}{kHz} de ancho de banda elegidos para este proyecto no son
+solo la opción de máxima capacidad (menor tiempo de aire, sección~\ref{sec:airtime}) —también
+son la que mejor encaja con esta condición regulatoria—.
+
+\begin{nota}
+Esta interpretación es razonable para un prototipo de investigación con 2--30 nodos, pero
+\textbf{no sustituye una verificación formal con la ANE} antes de cualquier despliegue
+permanente o comercial. Es uno de los supuestos declarados explícitamente en el plan del
+proyecto.
+\end{nota}
+
+Con solo 2--30 nodos transmitiendo tramas cortas de forma coordinada (ver el diseño TDMA de la
+Fase~4), la ocupación real del canal —41,5\,\% en el escenario de 30 nodos— queda por debajo de
+niveles que pondrían en riesgo la convivencia con otros usuarios de la misma banda libre.
+
+\section{Dónde aparece en el código}
+
+La validación del rango de canal (65--78) vive en \texttt{common/config.py} (Fase~1): el
+sistema \textbf{se niega a arrancar} fuera de ese rango salvo que se pase explícitamente el
+flag \texttt{allow\_out\_of\_band}, precisamente para que un error de configuración no termine
+transmitiendo en \SI{868}{MHz} por accidente.

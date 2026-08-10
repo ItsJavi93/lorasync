@@ -1,0 +1,101 @@
+\documentclass[11pt,a4paper]{report}
+
+% --- Idioma y codificación ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noindentfirst,es-noshorthands]{babel}
+\usepackage{lmodern}
+
+% --- Matemáticas y unidades ---
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{siunitx}
+\sisetup{output-decimal-marker = {,}, group-separator = {.}}
+
+% --- Figuras ---
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, decorations.pathmorphing, patterns}
+\usepackage{graphicx}
+\usepackage{caption}
+
+% --- Tablas ---
+\usepackage{booktabs}
+\usepackage{array}
+
+% --- Código y monoespaciado ---
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  columns=fullflexible,
+  keepspaces=true
+}
+
+% --- Cajas de nota didáctica ---
+\usepackage[most]{tcolorbox}
+\newtcolorbox{nota}[1][]{
+  colback=blue!5!white, colframe=blue!40!black,
+  fonttitle=\bfseries, title={Nota}, #1
+}
+\newtcolorbox{ejemplo}[1][]{
+  colback=green!5!white, colframe=green!30!black,
+  fonttitle=\bfseries, title={Ejemplo resuelto}, #1
+}
+\newtcolorbox{trampa}[1][]{
+  colback=orange!5!white, colframe=orange!60!black,
+  fonttitle=\bfseries, title={Trampa del hardware}, #1
+}
+
+% --- Referencias cruzadas y bibliografía ---
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=green!40!black,
+  urlcolor=blue!50!black,
+  pdftitle={Fundamentos de telemetría LoRa},
+  pdfauthor={Proyecto lorasync}
+}
+
+\title{Fundamentos de telemetría LoRa\\[0.3em]
+  \large De la onda de radio al dato en el CSV}
+\author{Proyecto \texttt{lorasync}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+Este documento explica, desde cero y con un tono didáctico, los fundamentos técnicos que
+sostienen el sistema de telemetría LoRa del proyecto \texttt{lorasync}: por qué se eligieron
+sus parámetros de radio, cómo funciona la modulación LoRa, por qué el espectro está regulado
+y qué banda es legal en Colombia. Cada concepto se presenta en tres pasos: \emph{qué es}
+(desde cero), \emph{por qué importa aquí} (aplicado a este proyecto) y \emph{dónde aparece en
+el código}. Las partes restantes, que dependen del código ya escrito, se añaden en fases
+posteriores del proyecto.
+\end{abstract}
+
+\tableofcontents
+
+\input{secciones/01-radio}
+\input{secciones/02-lora}
+\input{secciones/03-regulacion}
+
+% Partes IV-VIII: se añaden en la Fase 5, cuando el código correspondiente
+% (radio.py, frame.py, store.py, schedule.py, main.py) ya existe.
+% \input{secciones/04-modulo}
+% \input{secciones/05-canal}
+% \input{secciones/06-integridad}
+% \input{secciones/07-persistencia}
+% \input{secciones/08-sistema}
+% \input{secciones/09-apendices}
+
+\bibliographystyle{plain}
+\bibliography{referencias}
+
+\end{document}
