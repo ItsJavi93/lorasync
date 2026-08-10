@@ -13,6 +13,7 @@ BAUDRATE = 115200
 AT_TIMEOUT_S = 1.0  # espera máxima por la respuesta completa a un comando AT
 AT_POLL_S = 0.02  # intervalo de sondeo de bytes entrantes
 AT_QUIET_S = 0.2  # silencio tras el último byte que da la respuesta por terminada
+AT_ESCAPE_GUARD_S = 1.0  # guarda del reintento de '+++' cuando el módulo viene en modo paquete
 
 _AT_PARAMS = {
     "sf": "AT+SF={}",
@@ -57,15 +58,35 @@ class Radio:
     # ---- modo AT ----
 
     def enter_at_mode(self):
+        """Entra en modo AT y lo confirma con AT+VER; reintenta con una guarda más larga.
+
+        Un módulo que viene en modo paquete (AT+MODE=2, que persiste en flash entre arranques)
+        no hace eco de nada, así que un `+++` a ciegas dejaba al driver creyendo estar en modo
+        AT mientras todos los comandos posteriores devolvían cadena vacía -- el fallo aparecía
+        más tarde y disfrazado ("el módulo no confirmó la configuración aplicada").
+        La guarda de 0,2 s basta con el módulo ya en modo AT, pero no siempre para salir de
+        modo paquete; con 1,0 s sí.
+        """
         # ponytail: en algunos dongles (visto con chip CH343 en Windows) reentrar a modo AT
         # tras un exit_at_mode() previo no responde, incluso reabriendo el puerto. Usa un
         # Radio por sesión de comandos AT en vez de version()+apply_config() encadenados.
         if self._in_at_mode:
             return
-        time.sleep(GUARD_TIME_S)
-        self._ser.write(b"+++\r\n")
-        time.sleep(GUARD_TIME_S)
-        self._in_at_mode = True
+        for guard in (GUARD_TIME_S, AT_ESCAPE_GUARD_S):
+            time.sleep(guard)
+            self._ser.reset_input_buffer()
+            self._ser.write(b"+++\r\n")
+            time.sleep(guard)
+            self._in_at_mode = True
+            if "OK" in self._send_at("AT+VER"):
+                return
+            self._in_at_mode = False
+        raise RadioError(
+            f"El módulo en {self.config.port} no entró en modo AT: '+++' sin respuesta con "
+            f"guardas de {GUARD_TIME_S}s y {AT_ESCAPE_GUARD_S}s. Comprueba el puerto (el dongle "
+            f"es el 1a86 de /dev/serial/by-id/, no el GPS), el baudrate ({BAUDRATE}) y la "
+            f"alimentación de la Pi (Fase 1 nota 8)."
+        )
 
     def exit_at_mode(self):
         if not self._in_at_mode:
