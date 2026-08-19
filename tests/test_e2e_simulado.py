@@ -16,7 +16,9 @@ from node.store import NodeStore
 
 class _FakeSerial:
     """Simula el módulo LoRa en modo paquete: los 3 bytes de cabecera de destino los consume
-    el firmware (no viajan como datos) y el firmware receptor añade su propio byte de RSSI."""
+    el firmware (no viajan como datos) y el firmware receptor añade sus 2 bytes de RSSI.
+    Este fake añadía uno solo, y con eso el enlace real fallaba desde la segunda trama mientras
+    la suite entera seguía en verde: el fake mentía sobre el hardware."""
 
     def __init__(self, rssi_byte: int = 46):
         self.inbox = bytearray()
@@ -28,7 +30,9 @@ class _FakeSerial:
     def write(self, data: bytes):
         with self.peer._lock:
             self.peer.inbox.extend(data[3:])
-            self.peer.inbox.append(self._rssi_byte)
+            # 2 bytes literales, no RSSI_SUFFIX_LEN: el fake imita al hardware, no al parser.
+            # Y no idénticos, porque en hardware oscilan ±1 entre sí.
+            self.peer.inbox.extend([self._rssi_byte, self._rssi_byte + 1])
 
     def read(self, size: int) -> bytes:
         """Bloquea hasta `self.timeout` esperando datos, como pyserial real -- necesario para

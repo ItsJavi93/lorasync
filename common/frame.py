@@ -3,8 +3,8 @@
 [ver(1) tipo(1) id_nodo(2) seq_inicial(4) n_muestras(1) payload(N) crc16(2)] -> COBS -> + 0x00
 
 Enteros multibyte en big-endian. El CRC16 cubre todo menos sí mismo. COBS elimina cualquier
-0x00 del contenido, así que el 0x00 final es un delimitador inequívoco: el byte de RSSI que
-AT+RSSI=1 añade al final de cada paquete recibido cae después de ese delimitador y se ignora.
+0x00 del contenido, así que el 0x00 final es un delimitador inequívoco: los bytes de RSSI que
+AT+RSSI=1 añade al final de cada paquete recibido caen después de ese delimitador.
 """
 import struct
 from dataclasses import dataclass
@@ -15,6 +15,14 @@ _HEADER_LEN = struct.calcsize(_HEADER_FMT)
 _CRC_LEN = 2
 
 PROTOCOL_VERSION = 1
+
+# Bytes que el módulo añade tras CADA paquete recibido con AT+RSSI=1. Medido en hardware
+# (tools.hello_test): 'hola' (4 B) sale del dongle como 6 B, b'hola\x33\x34', y los dos
+# valores oscilan juntos entre 51 y 52 (-25.5 y -26.0 dBm) con los módulos pegados.
+# Descontar solo 1 dejaba el segundo byte pegado al frente de la trama siguiente: la primera
+# trama del enlace decodificaba bien y TODAS las posteriores morían como "bloque COBS
+# truncado", descartadas en silencio.
+RSSI_SUFFIX_LEN = 2
 
 
 class FrameType(IntEnum):
@@ -131,9 +139,10 @@ def split_frames(buf: bytes) -> tuple[list[bytes], bytes]:
 
 def split_stream(buf: bytes, rssi_append: bool = False) -> tuple[list[tuple[bytes, float | None]], bytes]:
     """Como split_frames, pero para un flujo continuo real del puerto serie con AT+RSSI=1
-    activo: cada trama va seguida de 1 byte de RSSI que el firmware inserta y que NO es parte
-    de la siguiente trama COBS, así que split_frames (que solo separa por 0x00) lo confundiría.
-    Devuelve (trama_sin_rssi, rssi_dbm) por cada trama completa, más el resto sin consumir."""
+    activo: cada trama va seguida de RSSI_SUFFIX_LEN bytes que el firmware inserta y que NO son
+    parte de la siguiente trama COBS, así que split_frames (que solo separa por 0x00) los
+    confundiría. Devuelve (trama_sin_rssi, rssi_dbm) por cada trama completa, más el resto sin
+    consumir."""
     frames: list[tuple[bytes, float | None]] = []
     idx = 0
     n = len(buf)
@@ -144,10 +153,14 @@ def split_stream(buf: bytes, rssi_append: bool = False) -> tuple[list[tuple[byte
         end = delim + 1
         rssi_dbm = None
         if rssi_append:
-            if end >= n:
-                break  # falta todavía el byte de RSSI
+            if end + RSSI_SUFFIX_LEN > n:
+                break  # faltan todavía bytes del sufijo de RSSI
+            # ponytail: se toma el primero de los dos, el pegado al paquete. A distancia cero
+            # los dos valen casi lo mismo (51/52) y no hay forma de distinguirlos; si uno
+            # resulta ser el RSSI del canal en vez del paquete, se ve alejando el nodo: el del
+            # paquete cae con la distancia, el del canal se queda en el ruido de fondo.
             rssi_dbm = -buf[end] / 2
-            end += 1
+            end += RSSI_SUFFIX_LEN
         frames.append((buf[idx:delim + 1], rssi_dbm))
         idx = end
     return frames, buf[idx:]

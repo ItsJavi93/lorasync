@@ -1,8 +1,8 @@
 import pytest
 
 from common.frame import (
-    Frame, FrameError, FrameType, cobs_decode, cobs_encode, crc16_ccitt_false,
-    decode_frame, encode_frame, split_frames,
+    RSSI_SUFFIX_LEN, Frame, FrameError, FrameType, cobs_decode, cobs_encode, crc16_ccitt_false,
+    decode_frame, encode_frame, split_frames, split_stream,
 )
 
 
@@ -61,6 +61,39 @@ def test_truncated_frame_raises_controlled_error():
 def test_empty_input_raises_controlled_error():
     with pytest.raises(FrameError):
         decode_frame(b"")
+
+
+# Sufijo literal, NO RSSI_SUFFIX_LEN: esto es lo que el hardware hace, no lo que el código cree
+# que hace. Si se derivara de la constante, el test seguiría en verde tras bajarla a 1 -- que es
+# exactamente el fallo que dejó pasar la suite mientras el enlace real no levantaba.
+_SUFIJO_RSSI_HW = bytes([0x33, 0x34])  # medido con tools.hello_test, módulos pegados
+
+
+def _con_sufijo_rssi(*frames: bytes) -> bytes:
+    """Flujo tal y como sale del dongle: cada paquete seguido de sus bytes de RSSI."""
+    return b"".join(f + _SUFIJO_RSSI_HW for f in frames)
+
+
+def test_stream_de_varias_tramas_no_se_desalinea_con_el_sufijo_rssi():
+    """Regresión del fallo de enlace real: con el sufijo mal contado la PRIMERA trama decodifica
+    y todas las siguientes mueren como 'bloque COBS truncado', porque el byte sobrante queda
+    pegado al frente de la trama siguiente y nunca se resincroniza."""
+    enviadas = [encode_frame(1, FrameType.DATA, 21, seq, 1, b"xy") for seq in (1, 2, 3)]
+    frames, resto = split_stream(_con_sufijo_rssi(*enviadas), rssi_append=True)
+
+    assert resto == b""
+    assert [decode_frame(raw).seq_inicial for raw, _ in frames] == [1, 2, 3]
+    assert [rssi for _, rssi in frames] == [-0x33 / 2] * 3
+
+
+def test_stream_espera_al_sufijo_rssi_completo():
+    """El sufijo puede llegar partido entre dos lecturas del puerto: la trama no se puede
+    entregar hasta tenerlo entero, o el byte que falta se cuela en la trama siguiente."""
+    completa = _con_sufijo_rssi(encode_frame(1, FrameType.DATA, 21, 1, 1, b"xy"))
+    for corte in range(1, RSSI_SUFFIX_LEN + 1):
+        frames, resto = split_stream(completa[:-corte], rssi_append=True)
+        assert frames == []
+        assert resto == completa[:-corte]
 
 
 def test_concatenated_frames_split_cleanly():

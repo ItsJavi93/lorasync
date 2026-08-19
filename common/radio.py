@@ -7,6 +7,7 @@ import serial
 from serial.tools import list_ports
 
 from common.config import RadioConfig
+from common.frame import RSSI_SUFFIX_LEN
 
 GUARD_TIME_S = 0.2
 BAUDRATE = 115200
@@ -189,19 +190,19 @@ class Radio:
         return self._ser.read(max_bytes)
 
     def receive(self, size: int, timeout_s: float | None = None) -> tuple[bytes, float | None]:
-        """Lee `size` bytes de datos. Si rssi_append está activo, separa y devuelve el byte de RSSI final.
+        """Lee `size` bytes de datos. Si rssi_append está activo, separa y devuelve el RSSI final.
 
         RSSI en dBm = -byte_rssi / 2 (registro RssiInst del SX1262, pasos de 0.5 dB;
         confirmado empíricamente: byte-256 daba valores imposibles como -205 dBm).
+        El módulo añade RSSI_SUFFIX_LEN bytes por paquete, no uno (ver common/frame.py).
         """
-        if timeout_s is not None:
+        if timeout_s is not None and self._ser.timeout != timeout_s:
             self._ser.timeout = timeout_s
-        n = size + 1 if self.config.rssi_append else size
+        suffix = RSSI_SUFFIX_LEN if self.config.rssi_append else 0
+        n = size + suffix
         raw = self._ser.read(n)
         if len(raw) < n:
             raise RadioError(f"Timeout: se esperaban {n} bytes, llegaron {len(raw)}")
-        if self.config.rssi_append:
-            data, rssi_byte = raw[:-1], raw[-1]
-            rssi_dbm = -rssi_byte / 2
-            return data, rssi_dbm
+        if suffix:
+            return raw[:-suffix], -raw[size] / 2
         return raw, None
