@@ -19,7 +19,17 @@ def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> 
     return trim_to_span(pending[-batch_size:] if prefer_newest else pending[:batch_size])
 
 
+def _restantes(pending: list[Sample], ack) -> int:
+    """Cola que queda DESPUÉS de aplicar el ACK. Se calcula sobre la lista ya leída en vez de
+    volver a consultar el store: en este punto nadie más ha insertado nada (mismo hilo)."""
+    if ack is None:
+        return len(pending)
+    return sum(1 for s in pending if s.seq > ack.seq_inicial)
+
+
 def _log_tx(batch: list[Sample], ack, pendientes: int) -> None:
+    """`pendientes` es la cola tras purgar, no antes. Loguear el valor previo daba siempre
+    batch_size -- el envío se dispara justo al alcanzarlo -- y parecía una cola clavada."""
     estado = f"ACK hasta {ack.seq_inicial}" if ack is not None else "SIN ACK"
     print(f"[{time.strftime('%H:%M:%S')}] TX seq {batch[0].seq}-{batch[-1].seq} "
           f"({len(batch)} muestras), {estado}, {pendientes} pendientes", flush=True)
@@ -81,7 +91,7 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
             if ack is not None:
                 store.mark_confirmed_up_to(ack.seq_inicial)
                 store.purge_confirmed()
-            _log_tx(batch, ack, len(pending))
+            _log_tx(batch, ack, _restantes(pending, ack))
 
         time.sleep(sample_interval_s)
         count += 1
@@ -104,7 +114,7 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
         scheduler.wait_for_slot()
         radio.send(master_addr, radio.config.channel, _build_frame(radio.config.addr, pending))
         ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
-        _log_tx(pending, ack, len(pending))
+        _log_tx(pending, ack, _restantes(pending, ack))
         if ack is None:
             attempts += 1
             continue
