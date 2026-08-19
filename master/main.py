@@ -45,8 +45,12 @@ def run_master(radio: Radio, store: MasterStore, csvsink: CsvSink, iterations: i
         for raw, rssi in frames:
             try:
                 fr = decode_frame(raw)
-            except FrameError:
-                continue  # trama corrupta/truncada: se descarta, nunca excepción sin control
+            except FrameError as err:
+                # Se descarta, nunca excepción sin control, pero se deja rastro: un descarte
+                # silencioso es indistinguible de "no llegó nada" cuando se depura el enlace.
+                print(f"[{time.strftime('%H:%M:%S')}] trama descartada ({err}): "
+                      f"{len(raw)} B {raw[:24].hex(' ')}", flush=True)
+                continue
             if fr.tipo == FrameType.DATA:
                 _handle_data_frame(radio, store, csvsink, fr, rssi, time.time())
         count += 1

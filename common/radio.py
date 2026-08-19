@@ -176,8 +176,15 @@ class Radio:
     def read_bytes(self, max_bytes: int = 4096, timeout_s: float | None = None) -> bytes:
         """Lee hasta `max_bytes` disponibles sin exigir un tamaño exacto, para tramas
         delimitadas (COBS) cuyo tamaño no se conoce de antemano. Con un timeout corto se
-        comporta como un poll: devuelve enseguida lo que haya, o vacío si no llegó nada."""
-        if timeout_s is not None:
+        comporta como un poll: devuelve enseguida lo que haya, o vacío si no llegó nada.
+
+        Solo se reasigna `timeout` si cambia: el setter de pyserial llama a
+        _reconfigure_port() sin comprobar si el valor es el mismo, y en Windows eso rehace
+        SetCommState sobre el puerto. Con el maestro sondeando a 20 Hz eran 20
+        reconfiguraciones por segundo sobre el CH34x, que descartan lo que hubiera en el
+        buffer de entrada del driver: el paquete llegaba al dongle (LED RX) pero se perdía
+        antes de que Python lo leyera."""
+        if timeout_s is not None and self._ser.timeout != timeout_s:
             self._ser.timeout = timeout_s
         return self._ser.read(max_bytes)
 
