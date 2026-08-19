@@ -49,9 +49,14 @@ def _wait_for_ack(radio: Radio, buf: bytes, timeout_s: float, own_addr: int):
 
 
 def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Scheduler,
-             sample_fn=read_sample, batch_size: int = 10, ack_timeout_s: float = 1.0,
+             sample_fn=read_sample, batch_size: int = 10, ack_timeout_s: float = 3.0,
              sample_interval_s: float = 1.0, flush_interval_s: float = 10.0,
              iterations: int | None = None) -> None:
+    """ack_timeout_s debe cubrir la latencia real del ACK, no solo el tiempo de aire (~80 ms
+    para un lote de 10 con SF7/BW500). Con AT+LBT=1 el módulo del maestro retrasa el ACK hasta
+    2 s escuchando el canal antes de emitir, así que 1 s se quedaba corto SIEMPRE: el ACK
+    llegaba tarde, se leía en el ciclo siguiente y la cola se quedaba clavada un lote por
+    detrás para siempre, reenviando muestras ya confirmadas."""
     recv_buf = b""
     last_flush = time.time()
     prefer_newest = False
@@ -123,4 +128,11 @@ if __name__ == "__main__":
 
     with Radio(radio_cfg) as radio, NodeStore(node_cfg.get("db_path", "node.db")) as store:
         radio.apply_config()
-        run_node(radio, store, node_cfg.get("master_addr", 10), AlohaScheduler())
+        run_node(
+            radio, store, node_cfg.get("master_addr", 10),
+            AlohaScheduler(max_delay_s=node_cfg.get("aloha_max_delay_s", 2.0)),
+            batch_size=node_cfg.get("batch_size", 10),
+            ack_timeout_s=node_cfg.get("ack_timeout_s", 3.0),
+            sample_interval_s=node_cfg.get("sample_interval_s", 1.0),
+            flush_interval_s=node_cfg.get("flush_interval_s", 10.0),
+        )

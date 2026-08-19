@@ -15,6 +15,19 @@ allow_out_of_band = false    # solo para pruebas de laboratorio fuera de la band
 master_addr = 10             # addr del dongle del maestro
 db_path = "node.db"
 
+# Ritmo del nodo. El aire NO es el cuello de botella: un lote de 10 muestras ocupa ~80 ms con
+# SF7/BW500/CR4-5, o sea menos del 3 % de un ciclo típico. El resto son esperas de software y
+# de LBT, y es ahí donde se ajusta la velocidad.
+sample_interval_s = 1.0      # cada cuánto se toma una muestra: gobierna la tasa de datos real
+batch_size = 10              # muestras por trama (10 -> ~200 B, holgado bajo el límite del módulo)
+ack_timeout_s = 3.0          # debe cubrir el LBT del maestro (hasta 2 s), no solo el aire.
+                             # Si se queda corto, el ACK llega tarde, se lee en el ciclo
+                             # siguiente y la cola se clava un lote por detrás para siempre.
+aloha_max_delay_s = 2.0      # jitter antievitación de colisiones ANTES de cada TX. Con un solo
+                             # nodo no evita nada y cuesta ~1 s de media por envío: bájalo a 0.2
+                             # en pruebas de un nodo, súbelo al desplegar varios.
+flush_interval_s = 10.0      # envía un lote incompleto si pasa este tiempo sin llenar batch_size
+
 [master]                     # solo lo usa master/main.py
 db_path = "master.db"
 csv_dir = "csv"
