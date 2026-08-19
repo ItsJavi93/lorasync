@@ -32,11 +32,12 @@ def _ack_de_otra_encarnacion(ack, max_seq_enviado: int) -> bool:
     return ack is not None and ack.seq_inicial > max_seq_enviado
 
 
-def _log_desincronizado(ack, max_seq_enviado: int) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] ACK hasta {ack.seq_inicial} DESCARTADO: este nodo "
-          f"solo ha enviado hasta seq {max_seq_enviado}. El maestro conserva la numeración de "
-          f"una ejecución anterior. No se purga nada (los datos siguen en cola). Borra "
-          f"master.db y csv/ en el maestro, o restaura el node.db original.", flush=True)
+def _log_resync(ack, max_seq_enviado: int, nuevo_max: int) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] RESYNC: el maestro confirma hasta seq "
+          f"{ack.seq_inicial} y este nodo solo ha enviado hasta {max_seq_enviado}. Conserva la "
+          f"numeración de una ejecución anterior, así que descartaba las muestras nuevas como "
+          f"duplicadas. Cola renumerada por encima: ahora llega hasta seq {nuevo_max}. No se "
+          f"pierde ninguna muestra; se reenvían todas.", flush=True)
 
 
 def _restantes(pending: list[Sample], ack) -> int:
@@ -91,7 +92,6 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
     last_flush = time.time()
     prefer_newest = False
     max_seq_enviado = 0
-    ya_avisado = False
 
     count = 0
     while iterations is None or count < iterations:
@@ -112,10 +112,11 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
 
             ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
             if _ack_de_otra_encarnacion(ack, max_seq_enviado):
-                if not ya_avisado:  # el "SIN ACK" de cada ciclo ya delata que sigue pasando
-                    _log_desincronizado(ack, max_seq_enviado)
-                    ya_avisado = True
-                ack = None
+                # Se resincroniza solo: en competencia no hay quién entre a borrar las bases de
+                # datos a mano, así que quedarse parado avisando no sirve de nada.
+                _log_resync(ack, max_seq_enviado, store.resync_desde(ack.seq_inicial))
+                max_seq_enviado = ack.seq_inicial
+                ack = None  # no confirma nada nuestro; el lote siguiente ya sale renumerado
             if ack is not None:
                 store.mark_confirmed_up_to(ack.seq_inicial)
                 store.purge_confirmed()
@@ -146,8 +147,10 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
         max_seq_enviado = max(max_seq_enviado, pending[-1].seq)
         ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
         if _ack_de_otra_encarnacion(ack, max_seq_enviado):
-            _log_desincronizado(ack, max_seq_enviado)
-            ack = None
+            _log_resync(ack, max_seq_enviado, store.resync_desde(ack.seq_inicial))
+            max_seq_enviado = ack.seq_inicial
+            attempts += 1  # gasta un intento: garantiza que este bucle de cierre termina
+            continue  # la cola cambió de numeración: se relee antes de reintentar
         _log_tx(pending, ack, _restantes(pending, ack))
         if ack is None:
             attempts += 1

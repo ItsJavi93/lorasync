@@ -64,3 +64,40 @@ class NodeStore:
         cur = self._conn.execute("DELETE FROM muestras WHERE confirmado=1")
         self._conn.commit()
         return cur.rowcount
+
+    def resync_desde(self, seq_base: int) -> int:
+        """Renumera la cola para que arranque en seq_base+1, y deja el contador ahí.
+
+        Hace falta cuando el maestro conserva la numeración de una ejecución anterior de este
+        nodo (node.db borrado, SD nueva, Pi reemplazada): los seq locales vuelven a empezar en 1
+        y chocan por número con muestras distintas que el maestro ya guardó, así que su
+        INSERT OR IGNORE las descarta y nunca las almacena. Saltar por encima de su último seq
+        las convierte otra vez en nuevas para él.
+
+        Se renumera la cola entera, incluido lo que todavía no se había entregado, así que no se
+        pierde ni una muestra. Devuelve el nuevo seq máximo (0 si no hubo nada que mover).
+        """
+        min_seq, max_seq = self._conn.execute(
+            "SELECT MIN(seq), MAX(seq) FROM muestras"
+        ).fetchone()
+        if min_seq is None:
+            nuevo_max = seq_base  # cola vacía: basta con mover el contador
+        else:
+            delta = seq_base + 1 - min_seq
+            if delta <= 0:
+                return 0  # ya estamos por encima; idempotente ante un ACK repetido
+            # Sin colisión de PRIMARY KEY: delta > (max_seq - min_seq), así que todo seq
+            # desplazado cae por encima del máximo actual.
+            self._conn.execute("UPDATE muestras SET seq = seq + ?", (delta,))
+            nuevo_max = max_seq + delta
+        # AUTOINCREMENT saca el siguiente seq de sqlite_sequence, no del contenido de la tabla:
+        # sin esto, las muestras nuevas volverían a la numeración vieja y chocarían otra vez.
+        cur = self._conn.execute(
+            "UPDATE sqlite_sequence SET seq = ? WHERE name = 'muestras'", (nuevo_max,)
+        )
+        if cur.rowcount == 0:  # aún no se ha insertado nada, la fila no existe
+            self._conn.execute(
+                "INSERT INTO sqlite_sequence (name, seq) VALUES ('muestras', ?)", (nuevo_max,)
+            )
+        self._conn.commit()
+        return nuevo_max

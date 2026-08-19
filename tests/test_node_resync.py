@@ -35,8 +35,12 @@ def test_ack_dentro_de_lo_enviado_es_valido():
     assert not _ack_de_otra_encarnacion(None, max_seq_enviado=10)
 
 
-def test_nodo_renumerado_no_pierde_la_cola_contra_un_maestro_con_historial(tmp_path):
-    """Nodo con seq desde 1 contra un maestro que ya guardó hasta 1222 del mismo id_nodo."""
+def test_nodo_renumerado_se_recupera_solo_contra_un_maestro_con_historial(tmp_path):
+    """Nodo con seq desde 1 contra un maestro que ya guardó hasta 1222 del mismo id_nodo.
+
+    Tiene que recuperarse SIN intervención: en competencia los nodos están fuera de alcance y
+    nadie puede entrar a borrar bases de datos a mano. Dejar el enlace parado avisando no vale.
+    """
     node_ser, master_ser = _make_pair()
     node_radio = Radio(RadioConfig(port="sim", addr=20, channel=70, rssi_append=True),
                         serial_port=node_ser)
@@ -71,7 +75,14 @@ def test_nodo_renumerado_no_pierde_la_cola_contra_un_maestro_con_historial(tmp_p
         h.join(timeout=15)
     assert not any(h.is_alive() for h in hilos)
 
-    # Las muestras no llegaron a guardarse (el maestro las tiró como duplicadas), así que TIENEN
-    # que seguir en la cola del nodo. Purgarlas sería perderlas para siempre.
     with NodeStore(node_db) as store:
-        assert len(store.get_pending()) == n_muestras
+        assert store.get_pending() == []  # todo entregado y purgado, nada varado
+
+    with MasterStore(master_db) as store:
+        # Las 12 muestras nuevas llegaron a guardarse por encima del historial de 1222, sin que
+        # nadie tocara ninguna de las dos bases de datos.
+        guardadas = store._conn.execute(
+            "SELECT COUNT(*) FROM recibidas WHERE nodo_id=20 AND seq > 1222"
+        ).fetchone()[0]
+        assert guardadas == n_muestras
+        assert store.get_ultimo_seq_contiguo(20) == 1222 + n_muestras  # sin huecos
