@@ -19,6 +19,26 @@ def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> 
     return trim_to_span(pending[-batch_size:] if prefer_newest else pending[:batch_size])
 
 
+def _ack_de_otra_encarnacion(ack, max_seq_enviado: int) -> bool:
+    """Un ACK acumulativo no puede confirmar más allá de lo que este nodo llegó a enviar.
+
+    Si lo hace, viene de un maestro que todavía recuerda la numeración de un nodo anterior:
+    node.db borrado o Pi reemplazada, con el master.db del otro lado intacto. Los seq vuelven a
+    empezar en 1 y chocan por número con los ya guardados, que son datos distintos. El maestro
+    los tira por su INSERT OR IGNORE ("0 nuevas de 10") y responde con su seq contiguo viejo,
+    muy por encima; el nodo purga con él toda la cola. Sin esta guarda no queda rastro de la
+    pérdida en ninguno de los dos lados: el nodo cree haber entregado y el maestro nunca
+    guardó nada."""
+    return ack is not None and ack.seq_inicial > max_seq_enviado
+
+
+def _log_desincronizado(ack, max_seq_enviado: int) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] ACK hasta {ack.seq_inicial} DESCARTADO: este nodo "
+          f"solo ha enviado hasta seq {max_seq_enviado}. El maestro conserva la numeración de "
+          f"una ejecución anterior. No se purga nada (los datos siguen en cola). Borra "
+          f"master.db y csv/ en el maestro, o restaura el node.db original.", flush=True)
+
+
 def _restantes(pending: list[Sample], ack) -> int:
     """Cola que queda DESPUÉS de aplicar el ACK. Se calcula sobre la lista ya leída en vez de
     volver a consultar el store: en este punto nadie más ha insertado nada (mismo hilo)."""
@@ -70,6 +90,8 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
     recv_buf = b""
     last_flush = time.time()
     prefer_newest = False
+    max_seq_enviado = 0
+    ya_avisado = False
 
     count = 0
     while iterations is None or count < iterations:
@@ -86,8 +108,14 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
 
             scheduler.wait_for_slot()
             radio.send(master_addr, radio.config.channel, _build_frame(radio.config.addr, batch))
+            max_seq_enviado = max(max_seq_enviado, batch[-1].seq)
 
             ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
+            if _ack_de_otra_encarnacion(ack, max_seq_enviado):
+                if not ya_avisado:  # el "SIN ACK" de cada ciclo ya delata que sigue pasando
+                    _log_desincronizado(ack, max_seq_enviado)
+                    ya_avisado = True
+                ack = None
             if ack is not None:
                 store.mark_confirmed_up_to(ack.seq_inicial)
                 store.purge_confirmed()
@@ -100,11 +128,13 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
     # proceso), no deja un resto de <batch_size muestras varado esperando al próximo
     # flush_interval_s que ya no llegará: drena la cola completa antes de devolver control.
     if iterations is not None:
-        _drain_all(radio, store, master_addr, scheduler, ack_timeout_s, batch_size, recv_buf)
+        _drain_all(radio, store, master_addr, scheduler, ack_timeout_s, batch_size, recv_buf,
+                    max_seq_enviado)
 
 
 def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Scheduler,
-                ack_timeout_s: float, batch_size: int, recv_buf: bytes, max_attempts: int = 5):
+                ack_timeout_s: float, batch_size: int, recv_buf: bytes,
+                max_seq_enviado: int = 0, max_attempts: int = 5):
     attempts = 0
     while attempts < max_attempts:
         pending = store.get_pending(limit=batch_size)
@@ -113,7 +143,11 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
         pending = trim_to_span(pending)
         scheduler.wait_for_slot()
         radio.send(master_addr, radio.config.channel, _build_frame(radio.config.addr, pending))
+        max_seq_enviado = max(max_seq_enviado, pending[-1].seq)
         ack, recv_buf = _wait_for_ack(radio, recv_buf, ack_timeout_s, radio.config.addr)
+        if _ack_de_otra_encarnacion(ack, max_seq_enviado):
+            _log_desincronizado(ack, max_seq_enviado)
+            ack = None
         _log_tx(pending, ack, _restantes(pending, ack))
         if ack is None:
             attempts += 1
