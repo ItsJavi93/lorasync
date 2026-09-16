@@ -1,5 +1,13 @@
 \documentclass[11pt,a4paper]{report}
 
+% --- Geometría de página ---
+\usepackage[margin=2.5cm]{geometry}
+
+% --- Espaciado de títulos (report deja demasiado aire antes/después) ---
+\usepackage{titlesec}
+\titleformat{\chapter}[hang]{\normalfont\Huge\bfseries}{\thechapter}{1em}{}
+\titlespacing*{\chapter}{0pt}{0pt}{20pt}
+
 % --- Idioma y codificación ---
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}

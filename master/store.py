@@ -31,6 +31,13 @@ class MasterStore:
     def __exit__(self, *exc):
         self.close()
 
+    def already_received(self, nodo_id: int, seq: int) -> bool:
+        """Consulta sin comprometer nada, para decidir si escribir el CSV antes del insert real
+        (ver master/main.py: el CSV debe escribirse antes del commit en DB, no después)."""
+        return self._conn.execute(
+            "SELECT 1 FROM recibidas WHERE nodo_id=? AND seq=?", (nodo_id, seq)
+        ).fetchone() is not None
+
     def insert_received(self, nodo_id: int, seq: int, ts_utc: float, ts_nodo: float,
                          rssi: int | None, payload: bytes) -> bool:
         """Inserta una muestra recibida (ignora duplicados) y avanza ultimo_seq_contiguo.

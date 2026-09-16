@@ -150,6 +150,7 @@ class Radio:
             "AT+TXCH?": str(self.config.channel),
             "AT+RXCH?": str(self.config.channel),
             "AT+BW?": str(self.config.bw_code),
+            "AT+ADDR?": str(self.config.addr),
         }
         mismatches = []
         for query, expected in checks.items():

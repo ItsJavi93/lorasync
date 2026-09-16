@@ -18,12 +18,12 @@ def _handle_data_frame(radio: Radio, store: MasterStore, csvsink: CsvSink, fr: F
     nuevas = 0
     for i, (ts_nodo, values) in enumerate(decode_batch(fr.payload, fr.n_muestras)):
         seq = fr.seq_inicial + i
-        inserted = store.insert_received(fr.id_nodo, seq, arrival_ts, ts_nodo, rssi_int,
-                                          encode_sample(values))
-        if inserted:
-            nuevas += 1
-            for variable, valor in values.items():
-                csvsink.write_row(arrival_ts, ts_nodo, fr.id_nodo, seq, variable, valor, rssi_int)
+        if store.already_received(fr.id_nodo, seq):
+            continue
+        nuevas += 1
+        for variable, valor in values.items():
+            csvsink.write_row(arrival_ts, ts_nodo, fr.id_nodo, seq, variable, valor, rssi_int)
+        store.insert_received(fr.id_nodo, seq, arrival_ts, ts_nodo, rssi_int, encode_sample(values))
 
     ack_seq = store.get_ultimo_seq_contiguo(fr.id_nodo) or 0
     ack = encode_frame(PROTOCOL_VERSION, FrameType.ACK, fr.id_nodo, ack_seq, 0, b"")
@@ -45,14 +45,20 @@ def run_master(radio: Radio, store: MasterStore, csvsink: CsvSink, iterations: i
         for raw, rssi in frames:
             try:
                 fr = decode_frame(raw)
+                if fr.tipo == FrameType.DATA:
+                    _handle_data_frame(radio, store, csvsink, fr, rssi, time.time())
             except FrameError as err:
                 # Se descarta, nunca excepción sin control, pero se deja rastro: un descarte
                 # silencioso es indistinguible de "no llegó nada" cuando se depura el enlace.
                 print(f"[{time.strftime('%H:%M:%S')}] trama descartada ({err}): "
                       f"{len(raw)} B {raw[:24].hex(' ')}", flush=True)
-                continue
-            if fr.tipo == FrameType.DATA:
-                _handle_data_frame(radio, store, csvsink, fr, rssi, time.time())
+            except Exception as err:
+                # El CRC solo protege contra corrupción en el aire, no contra un n_muestras que
+                # no coincide con el payload real (bug de codificación, cambio de protocolo). Sin
+                # esto, una sola trama así tira el proceso y corta la telemetría de todos los
+                # demás nodos hasta un reinicio manual.
+                print(f"[{time.strftime('%H:%M:%S')}] error procesando trama, se descarta "
+                      f"({err!r}): {len(raw)} B {raw[:24].hex(' ')}", flush=True)
         count += 1
 
 

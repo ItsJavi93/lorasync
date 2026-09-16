@@ -16,6 +16,11 @@ _CRC_LEN = 2
 
 PROTOCOL_VERSION = 1
 
+# Límite duro del módulo LoRa (firmware DTU): un paquete de más de esto se envía igual, pero
+# sale truncado o corrupto sin ningún error a nivel de firmware (PLAN.md Fase 3, "Límite del
+# módulo"). batch_size o número de variables altos lo superan en silencio si nada lo revisa aquí.
+MODULE_MAX_FRAME_LEN = 240
+
 # Bytes que el módulo añade tras CADA paquete recibido con AT+RSSI=1. Medido en hardware
 # (tools.hello_test): 'hola' (4 B) sale del dongle como 6 B, b'hola\x33\x34', y los dos
 # valores oscilan juntos entre 51 y 52 (-25.5 y -26.0 dBm) con los módulos pegados.
@@ -108,7 +113,13 @@ def encode_frame(ver: int, tipo: FrameType, id_nodo: int, seq_inicial: int, n_mu
     header = struct.pack(_HEADER_FMT, ver, tipo, id_nodo, seq_inicial, n_muestras)
     body = header + payload
     body += struct.pack(">H", crc16_ccitt_false(body))
-    return cobs_encode(body) + b"\x00"
+    encoded = cobs_encode(body) + b"\x00"
+    if len(encoded) > MODULE_MAX_FRAME_LEN:
+        raise FrameError(
+            f"trama de {len(encoded)} B excede el límite de {MODULE_MAX_FRAME_LEN} B del módulo "
+            f"(firmware DTU); reduce batch_size o el número de variables por muestra"
+        )
+    return encoded
 
 
 def decode_frame(raw: bytes) -> Frame:

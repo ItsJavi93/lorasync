@@ -4,6 +4,7 @@ from common.frame import (
     RSSI_SUFFIX_LEN, Frame, FrameError, FrameType, cobs_decode, cobs_encode, crc16_ccitt_false,
     decode_frame, encode_frame, split_frames, split_stream,
 )
+from node.sampler import VARIABLES, encode_batch, encode_sample
 
 
 def test_cobs_round_trip_zero_in_every_position():
@@ -110,3 +111,24 @@ def test_incomplete_trailing_frame_kept_as_remainder():
     complete, rest = split_frames(a + partial)
     assert len(complete) == 1
     assert rest == partial
+
+
+def _lote(n_muestras: int) -> bytes:
+    muestras = [(float(i), encode_sample({v: 1.0 for v in VARIABLES})) for i in range(n_muestras)]
+    return encode_batch(0.0, muestras)
+
+
+def test_encode_frame_rejects_frame_over_the_240b_module_limit():
+    """El módulo LoRa (firmware DTU) descarta o corrompe sin avisar cualquier paquete de más de
+    240 B (PLAN.md Fase 3, "Límite del módulo"). batch_size=13 con las 4 variables por defecto ya
+    lo supera; nada en encode_frame()/node/main.py lo detectaba antes de esto, así que la trama
+    salía igual, truncada, sin ningún error en el código."""
+    payload = _lote(13)
+    with pytest.raises(FrameError, match="240"):
+        encode_frame(1, FrameType.DATA, 10, 1, 13, payload)
+
+
+def test_encode_frame_allows_the_default_batch_size():
+    payload = _lote(10)  # batch_size=10 por defecto, 4 variables: el caso normal, con margen
+    raw = encode_frame(1, FrameType.DATA, 10, 1, 10, payload)
+    assert len(raw) <= 240
