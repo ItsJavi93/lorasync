@@ -1,5 +1,5 @@
 [radio]
-port = "COM3"              # Windows: COM*, Linux: /dev/ttyUSB*
+port = "COM3"              # Windows: COM*; Pi: ruta de /dev/serial/by-id/ (el dongle es ttyACM*)
 addr = 10                  # dirección propia (0-65535)
 channel = 70                # 850 + canal = MHz; 65-78 = banda legal CO (920 MHz en canal 70)
 sf = 7                       # factor de dispersión
@@ -8,7 +8,7 @@ cr = 1                        # tasa de codificación 4/5
 power_dbm = 10
 netid = 0
 lbt = true                    # true en modo ALOHA, false en modo TDMA (retrasa TX hasta 2 s)
-rssi_append = true           # añade byte de RSSI al final de cada paquete recibido
+rssi_append = true           # el módulo añade 2 bytes de RSSI al final de cada paquete recibido
 allow_out_of_band = false    # solo para pruebas de laboratorio fuera de la banda legal
 
 [node]                       # solo lo usa node/main.py
