@@ -13,19 +13,29 @@ from node.sampler import MAX_BATCH_SPAN_S, encode_batch, encode_sample, read_sam
 from node.store import NodeStore, Sample
 
 
-def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> list[Sample]:
-    """Lote más antiguo o más reciente de la cola, siempre dentro de MAX_BATCH_SPAN_S.
+def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool,
+                enviado_nuevo_hasta: int = 0) -> tuple[list[Sample], bool]:
+    """Elige el próximo lote y dice si salió en el turno "nuevo" del drenado intercalado.
 
-    El más antiguo se recorta desde su primera muestra; el más reciente, desde su ÚLTIMA. Si no,
-    tras un corte el lote "más reciente" quedaba anclado a las muestras viejas previas al hueco,
-    las reenviaba una y otra vez, y lo recién medido no salía hasta vaciar todo el atraso."""
+    Turno viejo: el lote más antiguo, recortado desde su primera muestra. Es el que hace avanzar
+    el ACK acumulativo y vacía el atraso en orden.
+
+    Turno nuevo: las `batch_size` muestras más recientes con seq > enviado_nuevo_hasta, recortadas
+    desde su ÚLTIMA muestra para no cruzar un hueco de tiempo. Si no alcanzan a llenar un lote
+    completo, el turno se cede al lote viejo. Así los lotes nuevos nunca repiten muestras entre sí
+    (antes cada uno repetía 8 de 10: 1808-1817, 1810-1819...) y el aire se gasta en vaciar el
+    atraso. Lo que el turno nuevo se salta no se pierde: lo lleva después el turno viejo.
+    """
     if len(pending) <= batch_size:
-        return trim_to_span(pending)
-    if not prefer_newest:
-        return trim_to_span(pending[:batch_size])
-    newest = pending[-batch_size:]
-    t_last = newest[-1].ts_utc
-    return [s for s in newest if t_last - s.ts_utc <= MAX_BATCH_SPAN_S]
+        return trim_to_span(pending), False
+    if prefer_newest:
+        sin_enviar = [s for s in pending[-batch_size:] if s.seq > enviado_nuevo_hasta]
+        if sin_enviar:
+            t_last = sin_enviar[-1].ts_utc
+            batch = [s for s in sin_enviar if t_last - s.ts_utc <= MAX_BATCH_SPAN_S]
+            if len(batch) == batch_size:
+                return batch, True
+    return trim_to_span(pending[:batch_size]), False
 
 
 def _ack_de_otra_encarnacion(ack, max_seq_enviado: int) -> bool:
@@ -101,6 +111,7 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
     last_flush = time.time()
     prefer_newest = False
     max_seq_enviado = 0
+    enviado_nuevo_hasta = 0  # último seq que salió en un turno "nuevo" del drenado
 
     count = 0
     while iterations is None or count < iterations:
@@ -110,7 +121,9 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
         pending = store.get_pending()
         now = time.time()
         if pending and (len(pending) >= batch_size or now - last_flush >= flush_interval_s):
-            batch = _next_batch(pending, batch_size, prefer_newest)
+            batch, fue_nuevo = _next_batch(pending, batch_size, prefer_newest, enviado_nuevo_hasta)
+            if fue_nuevo:
+                enviado_nuevo_hasta = batch[-1].seq
             if len(pending) > batch_size:
                 prefer_newest = not prefer_newest
             last_flush = now
