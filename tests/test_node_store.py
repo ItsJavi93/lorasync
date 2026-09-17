@@ -15,24 +15,27 @@ def test_add_and_get_pending_in_seq_order(tmp_path):
     store.close()
 
 
-def test_purge_never_deletes_unconfirmed(tmp_path):
+def test_confirmar_saca_de_la_cola_pero_conserva_el_registro(tmp_path):
+    """node.db es también el registro permanente del nodo: lo confirmado deja de estar pendiente,
+    pero nunca se borra (respaldo si falla el maestro después de confirmar)."""
     store = NodeStore(str(tmp_path / "node.db"))
-    seqs = [store.add_sample(float(i), b"x") for i in range(3)]
+    seqs = [store.add_sample(float(i), f"m{i}".encode()) for i in range(3)]
     store.mark_confirmed_up_to(seqs[0])
-    deleted = store.purge_confirmed()
-    assert deleted == 1
-    remaining = {p.seq for p in store.get_pending()}
-    assert remaining == set(seqs[1:])
+    assert [p.seq for p in store.get_pending()] == seqs[1:]
+    filas = store._conn.execute("SELECT seq, payload, confirmado FROM muestras ORDER BY seq").fetchall()
+    assert filas == [(seqs[0], b"m0", 1), (seqs[1], b"m1", 0), (seqs[2], b"m2", 0)]
     store.close()
 
 
-def test_seq_never_reused_even_after_full_purge(tmp_path):
+def test_confirmar_no_reescribe_lo_ya_confirmado(tmp_path):
+    """Con el historial creciendo, cada ACK reescribiría miles de filas ya confirmadas: lento y
+    desgasta la SD. Solo deben tocarse las que pasan de pendiente a confirmada."""
     store = NodeStore(str(tmp_path / "node.db"))
-    seq1 = store.add_sample(1.0, b"x")
-    store.mark_confirmed_up_to(seq1)
-    store.purge_confirmed()  # tabla queda vacía
-    seq2 = store.add_sample(2.0, b"y")
-    assert seq2 > seq1
+    seqs = [store.add_sample(float(i), b"x") for i in range(100)]
+    store.mark_confirmed_up_to(seqs[89])
+    antes = store._conn.total_changes
+    store.mark_confirmed_up_to(seqs[99])
+    assert store._conn.total_changes - antes == 10
     store.close()
 
 
@@ -53,4 +56,31 @@ os._exit(1)
     store = NodeStore(db_path)
     pending = store.get_pending()
     assert [p.payload for p in pending] == [("sample-" + str(i)).encode() for i in range(5)]
+    store.close()
+
+
+def test_resync_renumera_solo_la_cola_y_respeta_el_historial(tmp_path):
+    store = NodeStore(str(tmp_path / "node.db"))
+    for i in range(8):
+        store.add_sample(float(i), f"m{i}".encode())
+    store.mark_confirmed_up_to(5)  # historial 1-5, cola 6-8
+
+    assert store.resync_desde(1222) == 1225
+    filas = store._conn.execute("SELECT seq, payload, confirmado FROM muestras ORDER BY seq").fetchall()
+    assert filas == [(1, b"m0", 1), (2, b"m1", 1), (3, b"m2", 1), (4, b"m3", 1), (5, b"m4", 1),
+                     (1223, b"m5", 0), (1224, b"m6", 0), (1225, b"m7", 0)]
+    assert store.add_sample(9.0, b"m8") == 1226
+    store.close()
+
+
+def test_resync_con_una_cola_larga_no_choca_con_sus_propios_seq(tmp_path):
+    """Cola 1-30 y el maestro pide seguir desde 11: el destino (11-40) se solapa con seq que
+    todavía existen (11-30). Desplazar fila a fila violaría la PRIMARY KEY a mitad del UPDATE."""
+    store = NodeStore(str(tmp_path / "node.db"))
+    for i in range(30):
+        store.add_sample(float(i), f"m{i}".encode())
+
+    assert store.resync_desde(10) == 40
+    filas = store._conn.execute("SELECT seq, payload FROM muestras ORDER BY seq").fetchall()
+    assert filas == [(11 + i, f"m{i}".encode()) for i in range(30)]
     store.close()

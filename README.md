@@ -126,6 +126,18 @@ ambos). `node/sampler.py` es un stub con datos sintéticos (`temp_c`, `volt`, `h
 `press_hpa`); sustituir `read_sample()` por la lectura real de sensores cuando estén definidos,
 sin tocar el resto del sistema.
 
+Cada nodo guarda además en `node.db` el registro permanente de todo lo que midió: lo que el
+maestro confirma sale de la cola de envío pero nunca se borra. Sirve de respaldo si después falla
+el maestro (disco dañado, CSV borrado). Para pasarlo a CSV, en la Pi, incluso con `node.main`
+corriendo:
+
+```
+python -m tools.exportar_nodo node.db nodo.csv
+```
+
+Columnas `ts_nodo,seq,variable,valor,confirmado`, con los mismos `seq` que el CSV del maestro.
+Ocupa unos 50 B por muestra (~4 MB/día a 1 muestra/s).
+
 ## Verificación
 
 ```

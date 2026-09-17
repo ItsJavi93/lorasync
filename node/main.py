@@ -1,4 +1,6 @@
-"""Bucle del nodo: muestrear -> persistir -> agrupar -> transmitir -> escuchar ACK -> purgar.
+"""Bucle del nodo: muestrear -> persistir -> agrupar -> transmitir -> escuchar ACK -> confirmar.
+
+Lo confirmado sale de la cola pero se queda en node.db como registro permanente.
 
 Envía en cuanto hay `batch_size` muestras pendientes, o cuando pasan `flush_interval_s`
 segundos desde el último envío (para no dejar un resto de <10 muestras varado indefinidamente).
@@ -45,7 +47,7 @@ def _ack_de_otra_encarnacion(ack, max_seq_enviado: int) -> bool:
     node.db borrado o Pi reemplazada, con el master.db del otro lado intacto. Los seq vuelven a
     empezar en 1 y chocan por número con los ya guardados, que son datos distintos. El maestro
     los tira por su INSERT OR IGNORE ("0 nuevas de 10") y responde con su seq contiguo viejo,
-    muy por encima; el nodo purga con él toda la cola. Sin esta guarda no queda rastro de la
+    muy por encima; el nodo confirma con él toda la cola. Sin esta guarda no queda rastro de la
     pérdida en ninguno de los dos lados: el nodo cree haber entregado y el maestro nunca
     guardó nada."""
     return ack is not None and ack.seq_inicial > max_seq_enviado
@@ -68,7 +70,7 @@ def _restantes(pending: list[Sample], ack) -> int:
 
 
 def _log_tx(batch: list[Sample], ack, pendientes: int) -> None:
-    """`pendientes` es la cola tras purgar, no antes. Loguear el valor previo daba siempre
+    """`pendientes` es la cola tras confirmar, no antes. Loguear el valor previo daba siempre
     batch_size -- el envío se dispara justo al alcanzarlo -- y parecía una cola clavada."""
     estado = f"ACK hasta {ack.seq_inicial}" if ack is not None else "SIN ACK"
     print(f"[{time.strftime('%H:%M:%S')}] TX seq {batch[0].seq}-{batch[-1].seq} "
@@ -141,7 +143,6 @@ def run_node(radio: Radio, store: NodeStore, master_addr: int, scheduler: Schedu
                 ack = None  # no confirma nada nuestro; el lote siguiente ya sale renumerado
             if ack is not None:
                 store.mark_confirmed_up_to(ack.seq_inicial)
-                store.purge_confirmed()
             _log_tx(batch, ack, _restantes(pending, ack))
 
         time.sleep(sample_interval_s)
@@ -178,7 +179,6 @@ def _drain_all(radio: Radio, store: NodeStore, master_addr: int, scheduler: Sche
             attempts += 1
             continue
         store.mark_confirmed_up_to(ack.seq_inicial)
-        store.purge_confirmed()
         attempts = 0
 
 

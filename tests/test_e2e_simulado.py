@@ -1,5 +1,5 @@
 """Nodo y maestro conectados por puertos serie falsos, corriendo en hilos separados (como dos
-procesos reales), para probar el ciclo completo sin hardware: envío -> ACK -> purga, con
+procesos reales), para probar el ciclo completo sin hardware: envío -> ACK -> confirmación, con
 reintento cuando el maestro tarda en arrancar (simula un corte) y sin huecos ni duplicados."""
 import threading
 import time
@@ -115,7 +115,11 @@ def test_ciclo_completo_sin_huecos_ni_duplicados(tmp_path):
     assert not master_thread.is_alive()
 
     with NodeStore(node_db) as store:
-        assert store.get_pending() == []  # todo confirmado y purgado, nada varado
+        assert store.get_pending() == []  # todo confirmado, nada varado
+        # y nada borrado: node.db conserva el registro completo de lo enviado
+        assert store._conn.execute(
+            "SELECT COUNT(*), SUM(confirmado) FROM muestras"
+        ).fetchone() == (n_muestras, n_muestras)
 
     with MasterStore(master_db) as store:
         assert store.get_ultimo_seq_contiguo(20) == n_muestras  # sin huecos
