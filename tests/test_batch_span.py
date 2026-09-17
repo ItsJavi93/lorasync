@@ -34,6 +34,31 @@ def test_el_lote_recortado_siempre_codifica_y_decodifica():
     assert len(decode_batch(payload, len(batch))) == len(batch)
 
 
+def _cola_tras_reinicio(nuevas: int) -> list[Sample]:
+    """Como en hardware (2026-09-16): 79 muestras viejas (seq 313-391) de la ejecución anterior,
+    un corte de 1 h y `nuevas` muestras recién tomadas a 1 Hz (seq 392 en adelante)."""
+    viejas = [Sample(313 + i, 1_000_000.0 + i, _PAYLOAD) for i in range(79)]
+    recientes = [Sample(392 + i, 1_003_600.0 + i, _PAYLOAD) for i in range(nuevas)]
+    return viejas + recientes
+
+
+def test_lote_mas_nuevo_lleva_las_muestras_recientes_aunque_haya_hueco():
+    """El lote "más nuevo" del drenado intercalado debe llevar lo último medido. Recortado desde el
+    principio, se quedaba con la cola vieja (384-391, luego 386-391...) y reenviaba muestras que el
+    maestro ya tenía, mientras las recién tomadas no salían hasta vaciar todo el atraso."""
+    batch = _next_batch(_cola_tras_reinicio(nuevas=2), 10, prefer_newest=True)
+    assert [s.seq for s in batch] == [392, 393]
+
+    batch = _next_batch(_cola_tras_reinicio(nuevas=15), 10, prefer_newest=True)
+    assert [s.seq for s in batch] == list(range(397, 407))
+
+
+def test_lote_mas_nuevo_recortado_codifica_y_decodifica():
+    batch = _next_batch(_cola_tras_reinicio(nuevas=3), 10, prefer_newest=True)
+    payload = encode_batch(batch[0].ts_utc, [(s.ts_utc, s.payload) for s in batch])
+    assert len(decode_batch(payload, len(batch))) == len(batch)
+
+
 def test_nunca_devuelve_lote_vacio():
     # Aunque la segunda muestra ya exceda el rango, la primera siempre viaja.
     batch = _samples([0.0, MAX_BATCH_SPAN_S + 10])

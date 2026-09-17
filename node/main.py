@@ -9,14 +9,23 @@ import time
 from common.frame import PROTOCOL_VERSION, FrameError, FrameType, decode_frame, encode_frame, split_stream
 from common.radio import Radio
 from common.schedule import Scheduler
-from node.sampler import encode_batch, encode_sample, read_sample, trim_to_span
+from node.sampler import MAX_BATCH_SPAN_S, encode_batch, encode_sample, read_sample, trim_to_span
 from node.store import NodeStore, Sample
 
 
 def _next_batch(pending: list[Sample], batch_size: int, prefer_newest: bool) -> list[Sample]:
+    """Lote más antiguo o más reciente de la cola, siempre dentro de MAX_BATCH_SPAN_S.
+
+    El más antiguo se recorta desde su primera muestra; el más reciente, desde su ÚLTIMA. Si no,
+    tras un corte el lote "más reciente" quedaba anclado a las muestras viejas previas al hueco,
+    las reenviaba una y otra vez, y lo recién medido no salía hasta vaciar todo el atraso."""
     if len(pending) <= batch_size:
         return trim_to_span(pending)
-    return trim_to_span(pending[-batch_size:] if prefer_newest else pending[:batch_size])
+    if not prefer_newest:
+        return trim_to_span(pending[:batch_size])
+    newest = pending[-batch_size:]
+    t_last = newest[-1].ts_utc
+    return [s for s in newest if t_last - s.ts_utc <= MAX_BATCH_SPAN_S]
 
 
 def _ack_de_otra_encarnacion(ack, max_seq_enviado: int) -> bool:
