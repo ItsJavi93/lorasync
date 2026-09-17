@@ -107,14 +107,57 @@ python -m node.main config.toml
 ```
 
 Ambos aplican y verifican la configuración de radio al arrancar y corren indefinidamente.
-`Ctrl+C` para detener. En el nodo, la cola pendiente en `node.db` sobrevive a cortes de luz y se
-reenvía al volver. No hace falta borrar `node.db` ni `master.db` entre ejecuciones: si un nodo
-arranca con un `node.db` nuevo contra un maestro que conserva su historial, el nodo lo detecta y
-renumera su cola por encima sin perder muestras (`RESYNC` en el log).
+`Ctrl+C` para detener. No hace falta borrar `node.db` ni `master.db` entre ejecuciones.
+
+Para actualizar el código: `git pull` en la PC y en cada Pi, y volver a arrancar los programas.
+
+El ritmo del nodo (cada cuánto mide, tiempos de espera, jitter) se ajusta en la sección `[node]`
+de `config.toml`; cada parámetro está explicado en `config.example.toml`. Con varios nodos
+transmitiendo a la vez deja `lbt = true` y `aloha_max_delay_s = 2.0`; con uno solo en pruebas
+puedes bajar el jitter a `0.2` para ir más rápido.
+
+## Cómo leer el log
+
+**Nodo**, una línea por cada lote enviado:
+```
+[19:48:31] TX seq 1637-1646 (10 muestras), ACK hasta 1646, 172 pendientes
+```
+- `TX seq 1637-1646`: números de secuencia de las muestras que acaba de enviar. Cada muestra
+  tiene uno propio, que nunca se repite.
+- `ACK hasta 1646`: el maestro confirma que tiene **todas** las muestras seguidas hasta esa.
+- `172 pendientes`: muestras que aún esperan confirmación. En marcha normal es `0`.
+- `SIN ACK`: no llegó la confirmación (trama perdida, maestro apagado o fuera de alcance). No se
+  pierde nada: las muestras siguen en cola y se reenvían. Si aparece suelto, es normal.
+- `RESYNC: ...`: el nodo detectó que el maestro trae una numeración vieja (por ejemplo, se borró
+  `node.db` o se cambió la Pi) y renumeró su cola. Se recupera solo, sin perder muestras.
+
+**Maestro**, una línea por cada lote recibido:
+```
+[22:55:05] nodo 21: seq 393-402 (10 nuevas de 10), -26 dBm, ACK hasta 402
+```
+- `10 nuevas de 10`: cuántas no tenía ya. Menos de 10 significa que eran reenvíos, que se
+  descartan sin duplicar nada en el CSV.
+- `-26 dBm`: potencia de la señal recibida. Cuanto más cerca de 0, más fuerte.
+- `trama descartada (...)`: llegó algo corrupto. Se ignora y el nodo lo reenvía.
+
+**Tras un corte** (maestro apagado un rato) el nodo acumula pendientes. Al volver el enlace
+alterna lotes viejos, en orden, con lotes de lo recién medido, para que los datos en vivo sigan
+llegando mientras se vacía el atraso. Por eso el log salta entre dos secuencias:
+```
+TX seq 1637-1646 (10 muestras), ACK hasta 1646, 172 pendientes    <- atraso, en orden
+TX seq 1808-1817 (10 muestras), ACK hasta 1646, 173 pendientes    <- lo más reciente
+TX seq 1647-1656 (10 muestras), ACK hasta 1656, 164 pendientes    <- atraso, en orden
+...
+TX seq 1807-1816 (10 muestras), ACK hasta 1851, 1 pendientes
+```
+Con los lotes recientes el `ACK` no sube, porque al maestro todavía le falta el atraso. Cuando
+este termina, el ACK salta de golpe (`hasta 1851`) porque las muestras recientes ya estaban
+guardadas. Ese salto es correcto, no una pérdida.
 
 ## Qué genera
 
-El maestro escribe `csv/telemetria-AAAA-MM-DD.csv` (uno por día, formato largo, cabecera fija):
+**Maestro:** `csv/telemetria-AAAA-MM-DD.csv` (uno por día, formato largo, cabecera fija). Es el
+resultado principal del sistema:
 
 ```csv
 ts_utc,ts_nodo,nodo_id,seq,variable,valor,rssi
@@ -126,26 +169,100 @@ ambos). `node/sampler.py` es un stub con datos sintéticos (`temp_c`, `volt`, `h
 `press_hpa`); sustituir `read_sample()` por la lectura real de sensores cuando estén definidos,
 sin tocar el resto del sistema.
 
-Cada nodo guarda además en `node.db` el registro permanente de todo lo que midió: lo que el
-maestro confirma sale de la cola de envío pero nunca se borra. Sirve de respaldo si después falla
-el maestro (disco dañado, CSV borrado). Para pasarlo a CSV, en la Pi, incluso con `node.main`
-corriendo:
+**Cada nodo:** `node.db`, que es a la vez la cola de envío y el registro permanente de todo lo que
+midió. Lo que el maestro confirma sale de la cola pero nunca se borra, así que sirve de respaldo
+si después falla el maestro. Ocupa unos 50 B por muestra (~4 MB/día a 1 muestra/s). Cómo sacarlo,
+en la sección siguiente.
 
+## Recuperar el registro de un nodo (paso a paso)
+
+**1. Exportarlo a CSV, en la Pi** (por SSH, dentro de la carpeta `lorasync`). Se puede hacer con
+`node.main` corriendo, no lo interrumpe:
 ```
 python -m tools.exportar_nodo node.db nodo.csv
 ```
+Columnas: `ts_nodo,seq,variable,valor,confirmado`. Cada muestra ocupa 4 filas, una por variable.
+`confirmado` es `1` si el maestro ya la tiene y `0` si todavía está pendiente.
 
-Columnas `ts_nodo,seq,variable,valor,confirmado`, con los mismos `seq` que el CSV del maestro.
-Ocupa unos 50 B por muestra (~4 MB/día a 1 muestra/s).
+**2. Echarle un vistazo en la Pi** (opcional):
+```
+head -20 nodo.csv                        # primeras filas
+column -s, -t < nodo.csv | less -S       # como tabla; flechas para moverte, q para salir
+wc -l nodo.csv                           # filas: (muestras × 4) + 1 de cabecera
+awk -F, 'NR>1 {c[$5]++} END {for (k in c) print "confirmado="k, c[k]/4, "muestras"}' nodo.csv
+```
+La última línea cuenta cuántas muestras están confirmadas y cuántas pendientes.
 
-## Verificación
+**3. Copiarlo a la PC.** Este comando se ejecuta en PowerShell **en la PC**, no dentro de la
+sesión SSH. Usa el mismo usuario e IP con los que entras por `ssh`:
+```
+scp cnvte6@192.168.137.71:~/lorasync/nodo.csv .
+```
+El punto final es obligatorio: significa "copiar aquí", a la carpeta donde estás en PowerShell.
+Sin él, `scp` solo muestra su ayuda (`usage: scp ...`). Si recuperas varios nodos, dale a cada
+copia un nombre distinto para que no se pisen:
+```
+scp cnvte8@<ip-de-esa-pi>:~/lorasync/nodo.csv nodo_cnvte8.csv
+```
+Los `.csv` no se suben a git (están en `.gitignore`).
+
+**4. Abrirlo en Excel.** Si Excel lo muestra todo en una sola columna (pasa cuando Windows usa
+coma decimal), ábrelo desde *Datos → Obtener datos → Desde texto/CSV* y elige la coma como
+delimitador.
+
+## Comprobar que no faltan datos
+
+En la PC, desde la carpeta del proyecto (funciona en PowerShell). Revisa todos los CSV del maestro
+y dice, por nodo, cuántos números de secuencia faltan y cuántas filas están duplicadas:
+```
+python -c "import csv,glob,collections as c;k=c.Counter((r['nodo_id'],int(r['seq']),r['variable']) for f in glob.glob('csv/telemetria-*.csv') for r in csv.DictReader(open(f,encoding='utf-8')));s=c.defaultdict(set);[s[n].add(q) for n,q,_ in k];[print('nodo',n,'seq',min(v),'-',max(v),'| faltan',max(v)-min(v)+1-len(v),'| duplicadas',sum(x>1 for (m,_,_),x in k.items() if m==n)) for n,v in sorted(s.items())]"
+```
+Resultado correcto:
+```
+nodo 20 seq 1 - 1598 | faltan 0 | duplicadas 0
+nodo 22 seq 1 - 3867 | faltan 0 | duplicadas 0
+```
+
+## Qué pasa si algo falla
+
+| Situación | Qué hace el sistema | Qué tienes que hacer |
+|---|---|---|
+| Se apaga o cae el maestro | Los nodos siguen midiendo y acumulan la cola en `node.db` | Volver a arrancar `master.main`; el atraso se vacía solo |
+| Se pierden tramas o ACKs sueltos | `SIN ACK` y reenvío automático | Nada |
+| Un nodo pierde la corriente | La cola sobrevive en `node.db` | Volver a arrancar `node.main` |
+| Se borra `node.db` o se cambia la Pi | El nodo detecta la numeración vieja del maestro (`RESYNC`) y renumera su cola | Nada |
+| El nodo queda lejos o con mala señal | `SIN ACK` intermitentes; la cola crece y luego se vacía | Nada, o acercarlo |
+| Se pierde `master.db` en la PC | Los datos se siguen guardando en el CSV, pero los nodos ya no reciben confirmación y su cola crece sin vaciarse | **No borres `master.db`.** Si se pierde, restáuralo de una copia. Es una limitación conocida (ver `PLAN.md`, Fase 4) |
+
+Nunca desconectes la antena de un dongle mientras transmite: la potencia reflejada puede dañar el
+amplificador del módulo. Para simular mala señal, aleja el nodo o baja `power_dbm`.
+
+## Pruebas con hardware (paso a paso)
+
+Así se verificó la Fase 3. Sirve para comprobar una instalación nueva:
+
+1. Arranca el maestro y 2 nodos (`addr` distintas). El CSV del maestro debe crecer con datos de
+   ambos.
+2. Detén el maestro con `Ctrl+C` durante 10 minutos con los nodos corriendo. Sus pendientes
+   deben subir.
+3. Vuelve a arrancarlo. Mientras se vacía el atraso, el log del maestro debe mostrar de vez en
+   cuando lotes con los seq más recientes intercalados con los viejos.
+4. Espera a que los nodos vuelvan a `0 pendientes` y ejecuta la comprobación de
+   [Comprobar que no faltan datos](#comprobar-que-no-faltan-datos): `faltan 0` y `duplicadas 0`.
+5. Repite alejando un nodo hasta el límite de alcance (en vez de quitarle la antena) y
+   acercándolo de nuevo.
+6. Repite desenchufando la fuente de una Pi mientras corre (no con `Ctrl+C`). Al encenderla,
+   `node.main` debe arrancar sin errores y no debe faltar nada.
+7. En una Pi, exporta `node.db` y comprueba que las muestras confirmadas coinciden con las del CSV
+   del maestro para ese nodo.
+
+## Verificación sin hardware
 
 ```
 pytest tests/
 ```
 
-`tests/test_e2e_simulado.py` corre el ciclo completo (nodo + maestro, hilos separados, puertos
-serie falsos) sin hardware. La prueba que de verdad importa es con hardware real: arrancar
-maestro y nodos, apagar el maestro varios minutos con los nodos muestreando, reencenderlo y
-comprobar que el CSV queda con secuencias contiguas por nodo, sin huecos ni duplicados (criterio
-completo en `PLAN.md`, Fase 3).
+`tests/test_e2e_simulado.py`, `tests/test_drenado.py` y `tests/test_node_resync.py` corren nodo y
+maestro juntos (hilos separados, puertos serie falsos que imitan al dongle real), incluyendo cortes
+del maestro, tramas perdidas y reinicios del nodo, y comprueban que no falta ni se duplica ninguna
+muestra.

@@ -80,10 +80,11 @@ AT+VER       versión de firmware
    monótono *antes* de cualquier intento de envío.
 2. **Confirmación acumulativa.** El maestro publica por nodo el `último_seq_contiguo` recibido, igual
    que TCP. Un solo número confirma todo lo anterior, así que perder un ACK no cuesta nada.
-3. **Purgar solo lo confirmado.** Sin confirmación, el dato permanece en disco indefinidamente.
+3. **Sacar de la cola solo lo confirmado.** Sin confirmación, el dato sigue en la cola indefinidamente.
+   Lo confirmado tampoco se borra: queda en `node.db` como registro del nodo (Fase 3, nota 5).
 
-**Drenado intercalado:** al volver el enlace, el nodo alterna datos en vivo y atrasados (1:1 por
-defecto), para no atascarse reenviando historia mientras pierde el presente.
+**Drenado intercalado:** al volver el enlace, el nodo alterna datos atrasados (en orden) y en vivo,
+para no atascarse reenviando historia mientras pierde el presente (detalle en Fase 3, nota 6).
 
 ### Estructura de archivos objetivo
 
@@ -476,42 +477,66 @@ CREATE TABLE estado_nodo (
 
 ---
 
-# FASE 3 — Enlace extremo a extremo (ALOHA) ⏸ CÓDIGO LISTO, FALTA HARDWARE
+# FASE 3 — Enlace extremo a extremo (ALOHA) ✅ COMPLETADA (2026-09-16)
 
 ## Estado
 
-**Código completo, sin hardware.** Los 7 archivos están escritos (`common/schedule.py`,
-`node/sampler.py`, `node/main.py`, `master/csvsink.py`, `master/main.py`, `README.md`,
-`tests/test_e2e_simulado.py`), más 2 adiciones no invasivas a `common/frame.py`
-(`PROTOCOL_VERSION`, `split_stream` para separar tramas+RSSI en un flujo continuo) y
-`common/radio.py` (`read_bytes`, lectura de tamaño variable para tramas COBS). `pytest tests/`
-pasa 29/29, incluido el ciclo completo simulado (nodo y maestro en hilos separados sobre
-puertos serie falsos, con arranque tardío del maestro imitando un corte): sin huecos ni
-duplicados en el CSV resultante.
+**Hecha.** Se verificaron con hardware real los criterios 2-8: maestro en PC Windows (`COM11`,
+addr=10) y 2 nodos Raspberry Pi Zero 2W. Pruebas hechas por el usuario: maestro apagado con los
+nodos muestreando, degradación del enlace por distancia, corte de alimentación de un nodo a mitad
+de escritura y drenado intercalado en vivo. Comprobación final del CSV del maestro, sin huecos ni
+duplicados, con las 4 variables en cada muestra y `master.db` coincidiendo con el CSV: nodo 20,
+seq 1-1598; nodo 22, seq 1-3575. `pytest tests/` pasa 61/61.
 
-**Falta retomar con hardware real** (criterios 2-8 de más abajo, ninguno cubierto todavía):
-arrancar maestro + 2 nodos, apagar el maestro 10 min con los nodos muestreando, reencenderlo y
-verificar secuencias contiguas; repetir desconectando antena y cortando alimentación a mitad de
-escritura; confirmar el drenado intercalado en vivo.
+El criterio 6 original ("desconectar la antena") se sustituyó por alejar el nodo: transmitir sin
+antena puede dañar el amplificador del SX1262.
 
-### Notas para retomar
+La prueba con hardware destapó varios fallos que la suite simulada no veía. Están corregidos y
+con test propio; ver las notas.
 
-- **Formato de trama del lote:** payload = `ts_base` (float64, 8B) + por muestra
-  `ts_diff_ms(uint16, 2B) + 4 floats (16B)` = 18B/muestra. Ver `node/sampler.py` (`encode_batch`/
-  `decode_batch`). No se tocó el header de `common/frame.py` de la Fase 2.
-- **ACK reutiliza los campos existentes de `Frame`:** `tipo=ACK`, `id_nodo`=nodo destino,
-  `seq_inicial`=último_seq_contiguo confirmado, `n_muestras=0`, `payload=b""`. No hizo falta
-  agregar un tipo de trama nuevo.
-- **`node/main.py` drena la cola completa al final de un `run_node(..., iterations=N)` acotado**
-  (cierre ordenado o prueba), para no dejar un resto de <10 muestras varado. En despliegue real
-  (`iterations=None`) el bucle no termina nunca, así que esto no aplica salvo que se agregue un
-  cierre ordenado explícito más adelante.
-- **`config.example.toml`** ganó secciones `[node]` (`master_addr`, `db_path`) y `[master]`
-  (`db_path`, `csv_dir`); `lbt` se puso en `true` (obligatorio en ALOHA, ver PLAN.md arriba).
-- Antes de la prueba con hardware: copiar `config.example.toml` a `config.toml` en cada máquina
-  con `port`/`addr` reales (ver nota 9 de la Fase 1), y `master_addr` correcto en cada nodo.
+### Notas críticas para las próximas fases
 
--> NO ejecutar /clear todavía — retomar esta misma fase con hardware antes de pasar a Fase 4.
+1. **El dongle añade 2 bytes de RSSI por paquete, no 1** (`RSSI_SUFFIX_LEN` en
+   `common/frame.py`). Medido con `tools.hello_test`: `hola` (4 B) llega como 6 B. Con 1 byte, la
+   primera trama decodificaba y todas las siguientes morían como "bloque COBS truncado". El
+   `_FakeSerial` de los tests simulaba 1 byte y por eso la suite seguía en verde; ahora fija los
+   2 bytes de forma literal.
+2. **pyserial reconfigura el puerto cada vez que se asigna `timeout`**, aunque el valor no cambie.
+   En Windows (CH34x) eso descartaba el buffer de entrada con el maestro sondeando a 20 Hz.
+   `Radio.read_bytes` solo lo asigna si cambia.
+3. **`ack_timeout_s` debe cubrir el LBT del maestro**, que retrasa el ACK hasta 2 s. Con 1 s el ACK
+   llegaba siempre tarde, se leía en el ciclo siguiente y la cola quedaba un lote por detrás para
+   siempre. Por defecto 3 s. El ritmo del nodo (`sample_interval_s`, `batch_size`,
+   `ack_timeout_s`, `aloha_max_delay_s`, `flush_interval_s`) se configura en `[node]`. El aire no es
+   el cuello de botella: un lote de 10 muestras ocupa ~80 ms con SF7/BW500.
+4. **Resincronización automática del nodo.** Si el maestro confirma seq que el nodo nunca envió
+   (se borró `node.db` o se cambió la Pi, con `master.db` intacto), el nodo renumera su cola
+   pendiente por encima (`NodeStore.resync_desde`, log `RESYNC`) y la reenvía, sin intervención.
+   Solo se renumera lo pendiente, en dos pasos pasando por seq negativos para no violar la PRIMARY
+   KEY cuando el destino se solapa con la propia cola.
+5. **`node.db` es también el registro permanente del nodo.** Lo confirmado sale de la cola pero
+   no se borra (`confirmado=1`); `mark_confirmed_up_to` solo toca filas pendientes para no
+   reescribir el historial en cada ACK. Se exporta con `python -m tools.exportar_nodo node.db
+   nodo.csv`. ~50 B por muestra.
+6. **Drenado intercalado.** El turno viejo manda el lote más antiguo, recortado desde su primera
+   muestra. El turno nuevo manda las muestras más recientes que ningún lote nuevo anterior haya
+   enviado, recortadas desde su última muestra para no cruzar un hueco de tiempo; si no llenan un
+   lote, cede el turno al viejo. Antes, tras un corte, el lote nuevo reenviaba la cola vieja y cada
+   lote nuevo repetía 8 de 10 muestras del anterior. Durante el drenado el ACK no sube con los lotes
+   nuevos y luego salta de golpe al terminar el atraso: es lo esperado.
+7. **Puerto en la Pi:** el dongle enumera como `/dev/ttyACM*`, y el número puede cambiar al
+   reiniciar. Usar la ruta de `/dev/serial/by-id/` en `config.toml`. `find_dongle_port()` sigue
+   buscando solo `/dev/ttyUSB*` (nota 7 de la Fase 1, sin corregir).
+8. **Pendiente para la Fase 4: id de arranque en la trama.** Nada en la trama distingue una
+   ejecución de otra. El caso "nodo pierde `node.db`" se resuelve con el resync (nota 4), pero el
+   inverso no: si el maestro pierde `master.db`, su `ultimo_seq_contiguo` vuelve a 0, responde
+   `ACK hasta 0` para siempre y la cola de los nodos crece sin vaciarse (los datos sí se guardan en
+   el CSV). Adoptar la numeración de la primera trama recibida NO sirve: si esa trama es un lote
+   nuevo del drenado, el ACK confirmaría el atraso que nunca llegó. La solución correcta es un id de
+   arranque por nodo en la trama (+4 B, `PROTOCOL_VERSION` 2) y deduplicar por
+   `(nodo, arranque, seq)`. Encaja con el rediseño del ACK broadcast de esta fase.
+9. **En TDMA:** `lbt = false` (ya previsto) y `ack_timeout_s` puede bajar, pero el ACK broadcast
+   debe conservar la semántica acumulativa por nodo de la que dependen las notas 4-6.
 
 ---
 
@@ -552,7 +577,8 @@ La cabecera **nunca cambia**, aunque se agreguen sensores después. Se guardan l
 5. **Criterio de éxito:** al terminar el drenado, el CSV contiene **todos los números de secuencia,
    sin huecos y sin duplicados**, durante todo el corte. Verificar con un script que compruebe que la
    secuencia por nodo es contigua.
-6. Repetir desconectando la antena de un nodo (degradación en vez de caída limpia).
+6. Repetir alejando un nodo hasta el límite de alcance (degradación en vez de caída limpia). No
+   desconectar la antena con el nodo transmitiendo: puede dañar el amplificador del SX1262.
 7. Repetir cortando la alimentación de un nodo a mitad de escritura (durabilidad de SQLite).
 8. Comprobar que los datos en vivo siguen llegando **mientras** se drenan los atrasados (intercalado).
 
